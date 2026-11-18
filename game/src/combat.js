@@ -1,38 +1,42 @@
-// Combat on foot: one punch. It lands in a short arc in front of Mara — a pedestrian goes
-// down for a few seconds, a cop goes down too but the punch is a crime, so the wanted level
-// rises and the cop's colleagues come running. The world raises the punch event; this file
-// decides what the punch hits.
-import { PLAYER } from './config.js';
+// Fists: the player's punch, on foot, and what it does to the people nearby.
+import { PLAYER, WANTED } from './config.js';
+import { dist2d } from './random.js';
+import { addWanted } from './world.js';
 
-function angleDifference(from, to) {
-  let d = to - from;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
-/** Resolve a punch that just started: knock down whatever is in front of Mara. */
-export function resolvePunch(world) {
-  const state = world.state;
-  const player = state.player;
-  let events = 0;
+/** Swing at the nearest person in front of the player. */
+export function tryPunch(state) {
+  const p = state.player;
+  if (!p.onFoot) return false;
+  const fx = Math.sin(p.heading);
+  const fz = Math.cos(p.heading);
+  // Pedestrians first: one good punch sends them running.
   for (const ped of state.peds) {
-    if (ped.state === 'down') continue;
-    const dx = ped.x - player.x;
-    const dz = ped.z - player.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > PLAYER.punchRange) continue;
-    const angle = Math.atan2(dx, dz);
-    if (Math.abs(angleDifference(player.heading, angle)) > PLAYER.punchArc / 2) continue;
-    ped.state = 'down';
-    ped.downTimer = 3;
-    if (ped.kind === 'cop') {
-      // A cop goes down too — and the punch is a crime, so more police come.
-      ped.downTimer = 1.5;
-      events |= world.addCrime('punchCop');
-    } else {
-      ped.fleeTimer = 4;
+    if (ped.mode === 'down') continue;
+    const dx = ped.x - p.x;
+    const dz = ped.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < PLAYER.punchRange && (dx * fx + dz * fz) > 0) {
+      ped.mode = 'flee';
+      ped.timer = 3;
+      ped.x += dx * 0.6;
+      ped.z += dz * 0.6;
+      state.events.push({ type: 'punch' });
+      return true;
     }
   }
-  return events;
+  // A foot cop does not run. Hitting one is a crime.
+  if (state.footCops) {
+    for (const cop of state.footCops) {
+      const d = dist2d(p.x, p.z, cop.x, cop.z);
+      if (d < PLAYER.punchRange + 0.4) {
+        cop.x += fx * 2;
+        cop.z += fz * 2;
+        state.events.push({ type: 'punch' });
+        addWanted(state, WANTED.punchCop, 'You punched a cop!');
+        return true;
+      }
+    }
+  }
+  state.events.push({ type: 'punch' });
+  return false;
 }

@@ -1,174 +1,108 @@
-// The story: five jobs for Mara Voss, a getaway driver in Solmar Bay who owes the local
-// syndicate one last debt. Each mission is a title, a brief, an objective the HUD shows and
-// a condition the update loop checks against the world. Finishing one pays cash, saves the
-// progress and opens the next; after the fifth, the city is free roam.
-import { MISSION_REWARDS, NAMES } from './config.js';
-import { PLACES } from './city.js';
-import { loadSave, saveProgress } from './save.js';
+// The story: five missions in order, each with its own way to be finished.
+// Missions are checked inside the world's step, so a staged drive that reaches a
+// waypoint finishes the mission exactly the way a player's drive does.
+import { MISSIONS } from './config.js';
+import { dist2d } from './random.js';
+import { finishStory, setToast } from './world.js';
 
-const CHECKPOINTS = [PLACES.marina, PLACES.pier, { x: 99, z: 99, name: 'Sunset Plaza' }];
+const WAYPOINT_RADIUS = 9;
 
-const MISSIONS = [
-  {
-    id: 'wheels', title: 'First Wheels', reward: MISSION_REWARDS[0],
-    brief: `${NAMES.player} needs wheels. Any car will do — the city is full of them.`,
-    objective: 'Steal a car — walk up to one and press E',
-  },
-  {
-    id: 'drop', title: 'The Drop', reward: MISSION_REWARDS[1],
-    brief: `A package for ${NAMES.cafe}. Drive it to the beachfront — no police, no trouble.`,
-    objective: `Drive to ${NAMES.cafe}`,
-    waypoint: PLACES.cafe,
-  },
-  {
-    id: 'pursuit', title: 'Hot Pursuit', reward: MISSION_REWARDS[2],
-    brief: 'The drop was watched. Three stars, two patrol cars — lose them, all of them.',
-    objective: 'Lose the cops — get your wanted level to 0',
-    startWanted: 3,
-  },
-  {
-    id: 'getaway', title: 'The Getaway', reward: MISSION_REWARDS[3],
-    brief: `${NAMES.contact} is waiting at ${NAMES.bank} with a bag that is not his. Pick him up, then run him to ${NAMES.safehouse} — the police will not wait.`,
-    objective: `Pick up ${NAMES.contact} at ${NAMES.bank}`,
-    waypoint: PLACES.bank,
-    stageWaypoint: PLACES.safehouse,
-    startWanted: 0,
-  },
-  {
-    id: 'run', title: 'Solmar Run', reward: MISSION_REWARDS[4],
-    brief: 'One last run to clear the debt: three checkpoints, ninety seconds, the whole city watching.',
-    objective: 'Hit all 3 checkpoints before the timer runs out',
-    timeLimit: 90,
-  },
-];
+/** The mission the player is on right now, or null when the story is done. */
+export function currentMission(state) {
+  if (state.missionIndex >= MISSIONS.length) return null;
+  return MISSIONS[state.missionIndex];
+}
 
-export function createMissions(world) {
-  const state = world.state;
-  const saved = loadSave();
-  state.cash = saved.cash;
-  state.missionIndex = Math.min(saved.mission, MISSIONS.length - 1);
-  let stage = 0;
-  let timer = 0;
-  let checkpointIndex = 0;
-
-  function current() {
-    return MISSIONS[state.missionIndex] ?? null;
+/** Where the beacon and the HUD should point, or null for missions without a place. */
+export function missionWaypoint(state) {
+  const mission = currentMission(state);
+  if (!mission) return null;
+  if (mission.type === 'steal') {
+    // Point at the nearest car the player could borrow.
+    let best = null;
+    let bestD = Infinity;
+    for (const car of state.cars) {
+      if (car.kind === 'player') continue;
+      const d = dist2d(state.player.x, state.player.z, car.x, car.z);
+      if (d < bestD) { bestD = d; best = car; }
+    }
+    return best ? { x: best.x, z: best.z } : null;
   }
+  if (mission.type === 'goto') return mission.waypoint;
+  if (mission.type === 'checkpoints') return mission.checkpoints[state.mission.checkpoint];
+  return null;
+}
 
-  function setWaypoint(place) {
-    state.waypoint = place ? { x: place.x, z: place.z, name: place.name } : null;
+/** Start a mission's scripted heat (a wanted level it opens with). */
+function armMission(state, mission) {
+  if (mission.startWanted && state.wanted < mission.startWanted) {
+    state.wanted = mission.startWanted;
+    state.lastCrimeAt = state.time;
   }
+  state.mission.started = true;
+  state.mission.checkpoint = 0;
+  // The briefing waits behind the completion toast of the mission before it.
+  state.pendingBriefing = { text: `${mission.name} — ${mission.briefing}`, at: state.time + 5.5 };
+}
 
-  function startMission(index) {
-    state.missionIndex = index;
-    stage = 0;
-    timer = 0;
-    checkpointIndex = 0;
-    const mission = MISSIONS[index];
-    if (!mission) {
-      setWaypoint(null);
-      return;
-    }
-    if (mission.id === 'pursuit') {
-      state.wanted = mission.startWanted;
-      state.wantedTimer = 0;
-      for (let i = 0; i < 3; i += 1) world.spawnPoliceCar();
-    }
-    if (mission.id === 'run') {
-      timer = mission.timeLimit;
-      setWaypoint(CHECKPOINTS[0]);
-    } else {
-      setWaypoint(mission.waypoint ?? null);
-    }
-    world.setToast(`${mission.title} — ${mission.objective}`, 5);
+/** Pay out a finished mission and move to the next one. */
+function completeMission(state, mission) {
+  state.cash += mission.reward;
+  state.stats.missionsDone += 1;
+  state.events.push({ type: 'jingle' });
+  setToast(state, `Mission complete — ${mission.name} +$${mission.reward}`, 5);
+  state.missionIndex += 1;
+  state.mission = { checkpoint: 0, started: false };
+  const next = currentMission(state);
+  if (next) {
+    armMission(state, next);
+  } else {
+    finishStory(state);
   }
+}
 
-  function completeMission() {
-    const mission = current();
-    if (!mission) return;
-    state.cash += mission.reward;
-    state.missionIndex += 1;
-    saveProgress(state);
-    world.setToast(`Mission complete — ${mission.title}  +$${mission.reward}`, 4);
-    if (state.missionIndex >= MISSIONS.length) {
-      setWaypoint(null);
-      world.setToast('Debt cleared. Solmar Bay is yours — free roam.', 6);
-      return;
-    }
-    startMission(state.missionIndex);
+/** Check the current mission's finish condition. Called every world step. */
+export function updateMissions(state) {
+  const mission = currentMission(state);
+  if (!mission) return;
+  if (!state.mission.started) armMission(state, mission);
+  if (mission.type === 'steal') {
+    if (!state.player.onFoot) completeMission(state, mission);
+    return;
   }
-
-  function near(x, z, radius) {
-    return Math.hypot(state.player.x - x, state.player.z - z) < radius;
+  if (mission.type === 'goto') {
+    const w = mission.waypoint;
+    if (dist2d(state.player.x, state.player.z, w.x, w.z) < WAYPOINT_RADIUS) {
+      completeMission(state, mission);
+    }
+    return;
   }
-
-  /** Check the current mission's condition; call once per step. */
-  function update(dt) {
-    const mission = current();
-    if (!mission) return;
-    if (mission.id === 'wheels') {
-      if (!state.player.onFoot) completeMission();
-      return;
-    }
-    if (mission.id === 'drop') {
-      if (near(mission.waypoint.x, mission.waypoint.z, 9)) completeMission();
-      return;
-    }
-    if (mission.id === 'pursuit') {
-      if (state.wanted === 0) completeMission();
-      return;
-    }
-    if (mission.id === 'getaway') {
-      if (stage === 0) {
-        if (near(mission.waypoint.x, mission.waypoint.z, 8)) {
-          stage = 1;
-          state.wanted = 2;
-          state.wantedTimer = 0;
-          world.spawnPoliceCar();
-          world.spawnPoliceCar();
-          setWaypoint(mission.stageWaypoint);
-          world.setToast(`${NAMES.contact} is in. Drive to ${NAMES.safehouse} — lose the cops after.`, 5);
-        }
-        return;
-      }
-      if (near(mission.stageWaypoint.x, mission.stageWaypoint.z, 9)) completeMission();
-      return;
-    }
-    if (mission.id === 'run') {
-      timer -= dt;
-      const point = CHECKPOINTS[checkpointIndex];
-      if (point && near(point.x, point.z, 10)) {
-        checkpointIndex += 1;
-        const next = CHECKPOINTS[checkpointIndex];
-        if (next) {
-          setWaypoint(next);
-          world.setToast(`Checkpoint ${checkpointIndex} of 3 — ${Math.ceil(timer)}s left`, 3);
-        } else {
-          completeMission();
-        }
-        return;
-      }
-      if (timer <= 0) {
-        world.setToast('Out of time — the run restarts.', 4);
-        startMission(state.missionIndex);
+  if (mission.type === 'lose-cops') {
+    if (state.wanted === 0) completeMission(state, mission);
+    return;
+  }
+  if (mission.type === 'checkpoints') {
+    const cp = mission.checkpoints[state.mission.checkpoint];
+    if (cp && dist2d(state.player.x, state.player.z, cp.x, cp.z) < WAYPOINT_RADIUS) {
+      state.mission.checkpoint += 1;
+      if (state.mission.checkpoint >= mission.checkpoints.length) {
+        completeMission(state, mission);
+      } else {
+        setToast(state, `Checkpoint ${state.mission.checkpoint} of ${mission.checkpoints.length} — keep going!`, 3);
+        state.events.push({ type: 'jingle' });
       }
     }
   }
+}
 
-  function objectiveText() {
-    const mission = current();
-    if (!mission) return 'Free roam — Solmar Bay is yours';
-    let text = `${mission.title}: ${mission.objective}`;
-    if (mission.id === 'getaway' && stage === 1) text = `${mission.title}: Drive ${NAMES.contact} to ${NAMES.safehouse}`;
-    if (mission.id === 'run') text += ` — ${Math.max(0, Math.ceil(timer))}s`;
-    return text;
-  }
-
-  function distanceToWaypoint() {
-    if (!state.waypoint) return null;
-    return Math.round(Math.hypot(state.player.x - state.waypoint.x, state.player.z - state.waypoint.z));
-  }
-
-  startMission(state.missionIndex);
-  return { current, update, startMission, objectiveText, distanceToWaypoint, missions: MISSIONS };
+/** Human-readable objective line for the HUD, with a live distance. */
+export function objectiveText(state) {
+  const mission = currentMission(state);
+  if (!mission) return state.storyDone ? 'Free roam — Solmar Bay is yours' : '';
+  const w = missionWaypoint(state);
+  if (!w) return `${mission.name}: ${mission.objective}`;
+  const d = Math.round(dist2d(state.player.x, state.player.z, w.x, w.z));
+  const extra = mission.type === 'checkpoints'
+    ? ` (${state.mission.checkpoint + 1}/${mission.checkpoints.length})` : '';
+  return `${mission.name}: ${mission.objective}${extra} — ${d} m`;
 }

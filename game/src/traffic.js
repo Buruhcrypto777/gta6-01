@@ -1,132 +1,139 @@
-// Traffic: the cars that are not the player's. Each one holds a lane on the road grid — an
-// avenue or a street, a centre line and a direction — drives it at its own cruise speed,
-// slows for the car ahead, and at an intersection sometimes turns onto the cross road. The
-// turn is a short arc: the heading swings from the old road to the new one while the car
-// keeps rolling, then the lane is snapped to the new road.
-import { CAR, CITY } from './config.js';
+// Traffic and pedestrians: cars that follow the road grid, and people who walk the
+// sidewalks and run when the city gets loud.
+import { GRID, PEDS, TRAFFIC } from './config.js';
+import { clamp, dist2d, wrapAngle } from './random.js';
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+/** The intersection a car is driving toward, from its current leg. */
+function legTarget(car) {
+  const route = car.route;
+  if (!route || car.leg >= route.length) return null;
+  return route[car.leg];
 }
 
-function angleDifference(from, to) {
-  let d = to - from;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
-/** The heading a car holds while it drives its road in its direction. */
-function laneHeading(car) {
-  if (car.road === 'avenue') return car.dir > 0 ? 0 : Math.PI;
-  return car.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-}
-
-/** The lateral coordinate of the car's lane (right-hand traffic). */
-function lanePosition(car) {
-  if (car.road === 'avenue') return car.line + (car.dir > 0 ? -CITY.laneOffset : CITY.laneOffset);
-  return car.line + (car.dir > 0 ? CITY.laneOffset : -CITY.laneOffset);
-}
-
-/** The next cross road the car is about to reach, or null when it is mid-block. */
-function nextCrossing(car) {
-  const lines = car.road === 'avenue' ? CITY.streets : CITY.avenues;
-  const along = car.road === 'avenue' ? car.z : car.x;
-  for (const line of lines) {
-    const d = (line - along) * car.dir;
-    if (d > -2 && d < 14) return { line, distance: d };
+/** Pick a new route: a random walk of intersections across the grid. */
+function newRoute(rng, x, z) {
+  const route = [];
+  let cx = x;
+  let cz = z;
+  for (let i = 0; i < 5; i += 1) {
+    const horizontal = rng.chance(0.5);
+    const next = rng.pick(GRID.roads);
+    if (horizontal) cx = next;
+    else cz = next;
+    route.push({ x: cx, z: cz });
   }
-  return null;
+  return route;
 }
 
-/** How far the nearest car ahead is, in the direction this car is travelling. */
-function carAhead(world, car) {
-  let best = Infinity;
+/** Is another car close ahead in this car's lane? */
+function carAhead(state, car) {
   const fx = Math.sin(car.heading);
   const fz = Math.cos(car.heading);
-  for (const other of world.state.cars) {
-    if (other === car || other.state === 'parked') continue;
+  let nearest = Infinity;
+  for (const other of state.cars) {
+    if (other === car || other.kind === 'parked') continue;
     const dx = other.x - car.x;
     const dz = other.z - car.z;
-    const ahead = dx * fx + dz * fz;
-    if (ahead < 1 || ahead > 10) continue;
+    const along = dx * fx + dz * fz;
     const side = Math.abs(dx * fz - dz * fx);
-    if (side < 3 && ahead < best) best = ahead;
+    if (along > 0 && along < TRAFFIC.followGap + 6 && side < 3.5 && along < nearest) nearest = along;
   }
-  return best;
+  return nearest;
 }
 
-function startTurn(car, choice, crossing) {
-  const from = laneHeading(car);
-  let to;
-  let newRoad;
-  let newLine;
-  let newDir;
-  if (choice === 0) return false; // Straight on.
-  if (car.road === 'avenue') {
-    // From north/south to east/west: left is +x when going south, -x when going north.
-    newRoad = 'street';
-    newLine = crossing.line;
-    newDir = car.dir > 0 ? (choice < 0 ? -1 : 1) : (choice < 0 ? 1 : -1);
-    to = newDir > 0 ? Math.PI / 2 : -Math.PI / 2;
-  } else {
-    newRoad = 'avenue';
-    newLine = crossing.line;
-    newDir = car.dir > 0 ? (choice < 0 ? 1 : -1) : (choice < 0 ? -1 : 1);
-    to = newDir > 0 ? 0 : Math.PI;
+/** Drive one traffic car: follow its route, slow for the car ahead, overtake when stuck. */
+function stepTrafficCar(state, car, dt) {
+  if (car.kind !== 'traffic') return;
+  if (!car.route || car.leg >= car.route.length) {
+    car.route = newRoute(state.rng, car.x, car.z);
+    car.leg = 0;
   }
-  car.turning = { from, to, progress: 0, newRoad, newLine, newDir };
-  return true;
-}
-
-function stepTrafficCar(world, car, dt, random) {
-  if (car.turning) {
-    const turn = car.turning;
-    turn.progress += dt / 1.1;
-    car.heading = turn.from + angleDifference(turn.from, turn.to) * Math.min(1, turn.progress);
-    car.speed += (6 - car.speed) * Math.min(1, dt * 4);
-    car.x += Math.sin(car.heading) * car.speed * dt;
-    car.z += Math.cos(car.heading) * car.speed * dt;
-    if (turn.progress >= 1) {
-      car.road = turn.newRoad;
-      car.line = turn.newLine;
-      car.dir = turn.newDir;
-      car.turning = null;
-    }
+  const target = legTarget(car);
+  if (!target) return;
+  const dx = target.x - car.x;
+  const dz = target.z - car.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 3) {
+    car.leg += 1;
     return;
   }
-  // Hold the lane and the heading.
-  const target = laneHeading(car);
-  car.heading += clamp(angleDifference(car.heading, target), -2.4 * dt, 2.4 * dt);
-  if (car.road === 'avenue') car.x += (lanePosition(car) - car.x) * Math.min(1, dt * 3);
-  else car.z += (lanePosition(car) - car.z) * Math.min(1, dt * 3);
-  // Slow for the car ahead, stop bumper to bumper.
-  const ahead = carAhead(world, car);
-  let targetSpeed = car.cruise;
-  if (ahead < 10) targetSpeed = Math.min(targetSpeed, 4);
-  if (ahead < 5) targetSpeed = 0;
-  car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 3);
-  car.x += Math.sin(car.heading) * car.speed * dt;
-  car.z += Math.cos(car.heading) * car.speed * dt;
-  // At an intersection, sometimes turn: never drive out of the city.
-  const crossing = nextCrossing(car);
-  if (crossing && crossing.distance < 2.5 && car.decideAt !== crossing.line) {
-    car.decideAt = crossing.line;
-    const atEdge = (car.road === 'avenue' && Math.abs(crossing.line) >= CITY.half - 1)
-      || (car.road === 'street' && Math.abs(crossing.line) >= CITY.half - 1);
-    const roll = random();
-    const choice = atEdge ? (roll < 0.5 ? -1 : 1) : roll < 0.5 ? 0 : roll < 0.75 ? -1 : 1;
-    startTurn(car, choice, crossing);
+  const wantHeading = Math.atan2(dx, dz);
+  const turn = clamp(wrapAngle(wantHeading - car.heading), -1, 1);
+  car.heading += turn * 1.8 * dt;
+  const ahead = carAhead(state, car);
+  if (ahead < TRAFFIC.followGap) {
+    car.blocked += dt;
+    car.speed = Math.max(0, car.speed - 12 * dt);
+    if (car.blocked > TRAFFIC.blockedSeconds) {
+      // Overtake: swing into the next lane over and push past.
+      car.lane = car.lane === 0 ? -4.6 : 0;
+      car.blocked = 0;
+      car.speed = Math.min(car.cruise + 4, car.speed + 6);
+    }
+  } else {
+    car.blocked = 0;
+    car.speed += (car.cruise - car.speed) * Math.min(1, dt * 0.8);
   }
-  // Wrap around the far edge so the streets never empty out.
-  if (car.road === 'avenue' && Math.abs(car.z) > CITY.half + 8) car.z = -car.dir * (CITY.half + 8);
-  if (car.road === 'street' && Math.abs(car.x) > CITY.half + 8) car.x = -car.dir * (CITY.half + 8);
+  const laneX = Math.cos(car.heading) * car.lane;
+  const laneZ = -Math.sin(car.heading) * car.lane;
+  car.x += Math.sin(car.heading) * car.speed * dt + laneX * dt * 0.5;
+  car.z += Math.cos(car.heading) * car.speed * dt + laneZ * dt * 0.5;
 }
 
-/** Advance every traffic car one step. Parked, player and police cars are not touched. */
-export function updateTraffic(world, dt, random) {
-  for (const car of world.state.cars) {
-    if (car.state !== 'traffic') continue;
-    stepTrafficCar(world, car, dt, random);
+/** All traffic cars, one step. Parked and player cars are left alone. */
+export function updateTraffic(state, dt) {
+  for (const car of state.cars) stepTrafficCar(state, car, dt);
+}
+
+/** Walk the sidewalks; run from a speeding car or a raised fist. */
+export function updatePeds(state, dt) {
+  const player = state.player;
+  const playerCar = state.player.car;
+  const threatX = playerCar ? playerCar.x : player.x;
+  const threatZ = playerCar ? playerCar.z : player.z;
+  const threatFast = playerCar ? Math.abs(playerCar.speed) > 8 : false;
+  for (const ped of state.peds) {
+    if (ped.mode === 'down') {
+      ped.timer -= dt;
+      if (ped.timer <= 0) {
+        ped.mode = 'flee';
+        ped.timer = 3;
+      }
+      continue;
+    }
+    const d = dist2d(ped.x, ped.z, threatX, threatZ);
+    if (ped.mode === 'walk' && ((threatFast && d < 9) || d < 2.5)) {
+      ped.mode = 'flee';
+      ped.timer = 2.5;
+    }
+    if (ped.mode === 'flee') {
+      ped.timer -= dt;
+      const away = Math.atan2(ped.x - threatX, ped.z - threatZ);
+      ped.heading = away;
+      ped.x += Math.sin(away) * PEDS.fleeSpeed * dt;
+      ped.z += Math.cos(away) * PEDS.fleeSpeed * dt;
+      if (ped.timer <= 0) ped.mode = 'walk';
+    } else {
+      // Stroll along the sidewalk: keep to the edge of the nearest road.
+      ped.x += Math.sin(ped.heading) * ped.speed * dt;
+      ped.z += Math.cos(ped.heading) * ped.speed * dt;
+      if (!onSidewalk(ped.x, ped.z)) {
+        ped.heading += Math.PI / 2;
+      }
+    }
+    ped.x = clamp(ped.x, GRID.min - 2, GRID.seaX - 2);
+    ped.z = clamp(ped.z, GRID.min - 2, GRID.max + 2);
   }
+}
+
+/** Is a point on a sidewalk (just off the asphalt, inside the city)? */
+function onSidewalk(x, z) {
+  for (const r of GRID.roads) {
+    const dx = Math.abs(x - r);
+    const dz = Math.abs(z - r);
+    if ((dx >= GRID.roadHalf && dx <= GRID.roadHalf + 3.5) || (dz >= GRID.roadHalf && dz <= GRID.roadHalf + 3.5)) {
+      return true;
+    }
+  }
+  return x > GRID.beachX - 2;
 }

@@ -1,34 +1,30 @@
-// Saving: the cash and the mission Mara has reached, kept in this browser's localStorage
-// between visits. Everything is guarded — a private window or a disabled store just means
-// the progress lasts this visit only, never a crash.
+// Save and load: cash and mission progress in localStorage, nothing else.
+// A save from a newer build is read the same way; a corrupt one is ignored.
 import { SAVE_KEY } from './config.js';
 
+/** Read the save, or an empty one when there is none. */
 export function loadSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { cash: 0, mission: 0 };
-    const parsed = JSON.parse(raw);
+    if (!raw) return { cash: 0, missionIndex: 0 };
+    const data = JSON.parse(raw);
     return {
-      cash: Number.isFinite(parsed.cash) ? Math.max(0, parsed.cash) : 0,
-      mission: Number.isFinite(parsed.mission) ? Math.max(0, parsed.mission) : 0,
+      cash: typeof data.cash === 'number' ? Math.max(0, Math.floor(data.cash)) : 0,
+      missionIndex: typeof data.missionIndex === 'number' ? Math.max(0, Math.floor(data.missionIndex)) : 0,
     };
   } catch {
-    return { cash: 0, mission: 0 };
+    return { cash: 0, missionIndex: 0 };
   }
 }
 
-export function saveProgress(state) {
+/** Write the save from the world's cash and mission progress. */
+export function saveGame(state) {
   try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ cash: state.cash, mission: state.missionIndex }));
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      cash: state.cash,
+      missionIndex: state.missionIndex,
+    }));
   } catch {
-    // Storage can be off: the progress then lasts this visit only.
-  }
-}
-
-export function clearSave() {
-  try {
-    window.localStorage.removeItem(SAVE_KEY);
-  } catch {
-    // Nothing to clear.
+    // Storage can be off: the game then lasts this visit only.
   }
 }

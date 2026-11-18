@@ -1,23 +1,35 @@
-// A small seeded random number generator (mulberry32): the same seed gives the same city,
-// the same traffic and the same screenshot scenes, which is what makes the staged shots
-// repeatable. Nothing in the simulation uses Math.random.
-
+// A small seeded random generator (mulberry32) plus the helpers the world uses.
+// Same seed, same city, same traffic, same screenshots.
 export function createRandom(seed) {
   let a = seed | 0;
-  return function random() {
+  function next() {
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }
+  next.range = (lo, hi) => lo + next() * (hi - lo);
+  next.int = (lo, hi) => lo + Math.floor(next() * (hi - lo + 1));
+  next.pick = (arr) => arr[Math.floor(next() * arr.length)];
+  next.chance = (p) => next() < p;
+  return next;
 }
 
-/** Pick one element of `items` with the seeded generator. */
-export function pick(random, items) {
-  return items[Math.floor(random() * items.length)];
+/** Wrap an angle to (-PI, PI]. */
+export function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  return a;
 }
 
-/** A number in [min, max) from the seeded generator. */
-export function range(random, min, max) {
-  return min + random() * (max - min);
+/** Clamp a value between lo and hi. */
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** Euclidean distance between two ground points. */
+export function dist2d(ax, az, bx, bz) {
+  const dx = bx - ax;
+  const dz = bz - az;
+  return Math.sqrt(dx * dx + dz * dz);
 }

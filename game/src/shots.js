@@ -1,194 +1,150 @@
-// The screenshot scenes behind ?shot=cover|downtown|mission|beach. Each one stages a real
-// game: a fresh world from the seed, Mara put in a car (or on foot), the wanted level and
-// the mission set by hand, then the autopilot drives the simulation forward for a fixed
-// number of steps, so the frame is what a short game really looks like — the city, the
-// traffic, the police, the HUD and the minimap all at once — and the same seed always gives
-// the same frame.
-import { STEP } from './config.js';
-import { PLACES } from './city.js';
-import { updatePolice } from './police.js';
-import { updateTraffic } from './traffic.js';
-import { createRandom } from './random.js';
+// The screenshot scenes behind ?shot=cover|downtown|mission|beach. Each one plays
+// the real rules forward from a fresh world for a fixed number of steps, steered
+// by an autopilot that drives toward the objective and overtakes the car ahead,
+// so the frame is what a short game really looks like and the same seed always
+// gives the same frame. The camera framing is part of the scene: the shot's
+// camera sits where the action reads best.
+import { PALETTE, STEP } from './config.js';
+import { clamp, dist2d, wrapAngle } from './random.js';
+import { createWorld, resetWorld, stepWorld } from './world.js';
+import { missionWaypoint } from './missions.js';
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+const DRIVE_SECONDS = 1.6;
 
-function angleDifference(from, to) {
-  let d = to - from;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
-/** Put Mara in `car`, as if she had just stolen it: no crime, no fuss, just a staged scene. */
-function forceEnterCar(world, car) {
-  const player = world.state.player;
-  car.state = 'player';
-  car.driver = false;
-  car.speed = 0;
-  player.carId = car.id;
-  player.onFoot = false;
-  player.x = car.x;
-  player.z = car.z;
-  player.heading = car.heading;
-  player.speed = 0;
-}
-
-function findParkedCar(world, kind) {
-  const parked = world.state.cars.filter((c) => c.state === 'parked' && (!kind || c.kind === kind));
-  return parked[0] ?? world.state.cars.find((c) => c.state === 'parked');
-}
-
-/** The autopilot: steer at a target point, brake for the car ahead, never reverse. When it
- *  sits behind a car for a while, it changes lane to the left and overtakes instead of
- *  queuing behind it forever. `pilot` carries the overtake state between steps. */
-function autopilotDrive(world, targetX, targetZ, pilot) {
-  const car = world.playerCar();
-  const input = { moveX: 0, moveZ: 0, throttle: 0, steer: 0, handbrake: false, sprint: false, enter: false, punch: false };
-  if (!car) return input;
+/** Steer toward a ground point, overtaking the car ahead when one blocks the way. */
+function driveToward(state, tx, tz) {
+  const car = state.player.car;
+  if (!car) return { fwd: 0, strafe: 0, steer: 0, run: false, handbrake: false, enterCar: false, punch: false };
+  const dx = tx - car.x;
+  const dz = tz - car.z;
+  const dist = Math.hypot(dx, dz);
+  const wantHeading = Math.atan2(dx, dz);
+  const error = wrapAngle(wantHeading - car.heading);
+  let steer = clamp(error * 2.2, -1, 1);
+  let fwd = Math.abs(error) < 1.0 ? 1 : 0.4;
+  // Is a car blocking the lane ahead? Swing to the clearer side and push past.
   const fx = Math.sin(car.heading);
   const fz = Math.cos(car.heading);
-  let blocked = null;
-  for (const other of world.state.cars) {
-    if (other === car || other.state === 'parked') continue;
-    const dx = other.x - car.x;
-    const dz = other.z - car.z;
-    const ahead = dx * fx + dz * fz;
-    const side = Math.abs(dx * fz - dz * fx);
-    if (ahead > 0 && ahead < 9 && side < 3) {
-      blocked = other;
-      break;
+  let blocked = false;
+  let leftClear = 0;
+  let rightClear = 0;
+  for (const other of state.cars) {
+    if (other === car || other.kind === 'parked') continue;
+    const ox = other.x - car.x;
+    const oz = other.z - car.z;
+    const along = ox * fx + oz * fz;
+    const side = ox * fz - oz * fx;
+    if (along > 0 && along < 10 && Math.abs(side) < 3.2) blocked = true;
+    if (along > -4 && along < 14) {
+      if (side < -3) leftClear += 1;
+      if (side > 3) rightClear += 1;
     }
   }
-  if (blocked) pilot.blocked += STEP;
-  else pilot.blocked = 0;
-  let aimX = targetX;
-  let aimZ = targetZ;
-  if (pilot.blocked > 0.6) {
-    // Change lane to the left and pass: aim fifteen metres ahead, seven to the left.
-    const leftX = Math.cos(car.heading);
-    const leftZ = -Math.sin(car.heading);
-    aimX = car.x + fx * 15 + leftX * 7;
-    aimZ = car.z + fz * 15 + leftZ * 7;
-    if (pilot.blocked > 2.5) pilot.blocked = 0;
+  if (blocked) {
+    fwd = 0.55;
+    steer = leftClear <= rightClear ? -0.85 : 0.85;
   }
-  const diff = angleDifference(car.heading, Math.atan2(aimX - car.x, aimZ - car.z));
-  input.steer = clamp(diff * 2.0, -1, 1);
-  input.throttle = blocked ? -0.6 : Math.abs(diff) < 1.0 ? 1 : 0.4;
-  if (pilot.blocked > 0.6) input.throttle = 0.8;
-  return input;
+  if (dist < 7 && Math.abs(car.speed) > 6) fwd = -1;
+  return { fwd, strafe: 0, steer, run: false, handbrake: false, enterCar: false, punch: false };
 }
 
-/** Run the simulation forward `seconds` with the autopilot driving at the target. */
-function driveFor(world, random, seconds, targetX, targetZ) {
-  const pilot = { blocked: 0 };
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    world.step(STEP, autopilotDrive(world, targetX, targetZ, pilot));
-    updateTraffic(world, STEP, random);
-    updatePolice(world, STEP);
-    world.missions?.update(STEP);
+/** Put the player in a car at a spot, at a speed, with a wanted level and pursuit. */
+function placeDriver(state, x, z, heading, speed, color, wanted, policeBehind) {
+  // Borrow the nearest parked car and move it to the staging spot.
+  let car = null;
+  let bestD = Infinity;
+  for (const c of state.cars) {
+    if (c.kind !== 'parked') continue;
+    const d = dist2d(state.player.x, state.player.z, c.x, c.z);
+    if (d < bestD) { bestD = d; car = c; }
   }
+  if (!car) return null;
+  car.kind = 'player';
+  car.x = x;
+  car.z = z;
+  car.heading = heading;
+  car.speed = speed;
+  if (color !== null) car.color = color;
+  state.player.car = car;
+  state.player.onFoot = false;
+  state.player.x = x;
+  state.player.z = z;
+  state.player.heading = heading;
+  state.player.speed = speed;
+  state.wanted = wanted;
+  state.lastCrimeAt = state.time;
+  state.quietSince = state.time;
+  // Pursuit from behind, never head-on: the cruisers close from the player's wake.
+  for (let i = 0; i < policeBehind; i += 1) {
+    const back = 12 + i * 7;
+    const side = i % 2 === 0 ? -4 : 4;
+    const bx = x - Math.sin(heading) * back + Math.cos(heading) * side;
+    const bz = z - Math.cos(heading) * back - Math.sin(heading) * side;
+    state.cars.push({
+      id: 9000 + i, kind: 'police', x: bx, z: bz, heading,
+      speed: Math.max(20, speed - 2), color: PALETTE.policeWhite, isPolice: true,
+      cruise: 40, lane: 0, route: null, leg: 0, blocked: 0, flash: 1,
+    });
+  }
+  return car;
 }
 
-/** Put the police cars just behind Mara's car, flanking it, so the chase reads in the frame. */
-function placePoliceBehind(world, offsets) {
-  const player = world.state.player;
-  const forward = { x: Math.sin(player.heading), z: Math.cos(player.heading) };
-  const right = { x: -Math.cos(player.heading), z: Math.sin(player.heading) };
-  const police = world.state.cars.filter((c) => c.state === 'police');
-  police.forEach((car, i) => {
-    const offset = offsets[i % offsets.length];
-    car.x = player.x - forward.x * offset.back + right.x * offset.side;
-    car.z = player.z - forward.z * offset.back + right.z * offset.side;
-    car.heading = player.heading;
-    car.speed = player.speed;
-  });
-}
-
-function stageCover(world, random) {
-  world.reset();
-  const car = findParkedCar(world, 'sport');
-  car.x = 0;
-  car.z = 60;
-  car.heading = Math.PI;
-  forceEnterCar(world, car);
-  world.state.wanted = 3;
-  world.state.wantedTimer = 0;
-  world.state.missionIndex = 2;
-  world.state.waypoint = null;
-  world.spawnPoliceCar();
-  world.spawnPoliceCar();
-  driveFor(world, random, 6, 0, -150);
-  placePoliceBehind(world, [{ back: 4, side: 3 }, { back: 5.5, side: -3 }]);
-  world.state.wanted = 3;
-  world.state.wantedTimer = 0;
-  const player = world.state.player;
-  return { yaw: player.heading + Math.PI, pitch: 0.26, distance: 12, target: { x: player.x, y: 1.5, z: player.z } };
-}
-
-function stageDowntown(world, random) {
-  world.reset();
-  const car = findParkedCar(world, 'sedan');
-  car.x = -132;
-  car.z = 132;
-  car.heading = Math.PI / 2;
-  forceEnterCar(world, car);
-  world.state.missionIndex = 1;
-  world.state.waypoint = { x: PLACES.cafe.x, z: PLACES.cafe.z, name: PLACES.cafe.name };
-  driveFor(world, random, 7, 132, 132);
-  const player = world.state.player;
-  return { yaw: player.heading + Math.PI, pitch: 0.3, distance: 12, target: { x: player.x, y: 1.5, z: player.z } };
-}
-
-function stageMission(world, random) {
-  world.reset();
-  const car = findParkedCar(world, 'sedan');
-  car.x = -66;
-  car.z = 132;
-  car.heading = Math.PI / 2;
-  forceEnterCar(world, car);
-  world.missions.startMission(1);
-  // East along the beach road, then south onto the café forecourt: arriving at
-  // Café Marisol (44, 146) completes the drop (+$400).
-  driveFor(world, random, 4, 44, 132);
-  driveFor(world, random, 1.2, 44, 146);
-  // Completing the drop starts Hot Pursuit, whose start toast overwrites the reward toast;
-  // put the reward back so the frame shows the payoff.
-  world.setToast('Mission complete — The Drop  +$400', 30);
-  const player = world.state.player;
-  return { yaw: player.heading + Math.PI + 0.5, pitch: 0.32, distance: 11, target: { x: player.x, y: 1.5, z: player.z } };
-}
-
-function stageBeach(world, random) {
-  world.reset();
-  const car = findParkedCar(world, 'sport');
-  car.x = -120;
-  car.z = 132;
-  car.heading = Math.PI / 2;
-  forceEnterCar(world, car);
-  world.state.wanted = 2;
-  world.state.wantedTimer = 0;
-  world.state.missionIndex = 1;
-  world.state.waypoint = { x: PLACES.cafe.x, z: PLACES.cafe.z, name: PLACES.cafe.name };
-  world.spawnPoliceCar();
-  driveFor(world, random, 6, 150, 132);
-  world.state.wanted = 2;
-  world.state.wantedTimer = 0;
-  const player = world.state.player;
-  return { yaw: player.heading + Math.PI, pitch: 0.3, distance: 13, target: { x: player.x, y: 1.5, z: player.z } };
+/** Run the world forward with the autopilot until a condition holds or steps run out. */
+function runUntil(state, target, maxSteps, done) {
+  let steps = 0;
+  while (steps < maxSteps) {
+    const input = target ? driveToward(state, target.x, target.z) : { fwd: 1, strafe: 0, steer: 0, run: false, handbrake: false, enterCar: false, punch: false };
+    stepWorld(state, input, STEP);
+    steps += 1;
+    if (done && done(state)) break;
+  }
+  return steps;
 }
 
 /**
- * Set `world` to the named scene and return the camera spec to frame it with. Any other
- * name is the cover. The traffic decisions use their own seeded generator, so the scene
- * is the same every time the seed is the same.
+ * Set the world to the named scene and return the camera framing for it.
+ * The screen is always the play screen; the HUD shows the mission live.
  */
-export function stageShot(name, world, seed) {
-  const random = createRandom(seed * 31 + 11);
-  if (name === 'downtown') return stageDowntown(world, random);
-  if (name === 'mission') return stageMission(world, random);
-  if (name === 'beach') return stageBeach(world, random);
-  return stageCover(world, random);
+export function stageShot(name, world) {
+  resetWorld(world);
+  const state = world;
+  const shots = {
+    cover: { mission: 2, cash: 0, start: { x: -60, z: 84, heading: Math.PI / 2, speed: 34 }, color: PALETTE.carRed, wanted: 3, police: 2, camPitch: 0.26, camDist: 14, camAhead: Math.PI - 0.35 },
+    downtown: { mission: 1, cash: 0, start: { x: 50, z: 140, heading: Math.PI / 2, speed: 27 }, color: null, wanted: 0, police: 0, camPitch: 0.3, camDist: 12, camAhead: 0 },
+    mission: { mission: 1, cash: 0, start: { x: 95, z: 140, heading: Math.PI / 2, speed: 27 }, color: null, wanted: 3, police: 1, camPitch: 0.28, camDist: 13, camAhead: 0.4 },
+    beach: { mission: 1, cash: 0, start: { x: 196, z: 120, heading: Math.PI, speed: 34 }, color: PALETTE.carRed, wanted: 2, police: 0, camPitch: 0.3, camDist: 12, camAhead: 0 },
+  };
+  const shot = shots[name] ?? shots.cover;
+  state.missionIndex = shot.mission;
+  state.cash = shot.cash;
+  const s = shot.start;
+  placeDriver(state, s.x, s.z, s.heading, s.speed, shot.color, shot.wanted, shot.police);
+  // Let the mission arm itself (its briefing waits behind the completion toast).
+  stepWorld(state, { fwd: 0, strafe: 0, steer: 0, run: false, handbrake: false, enterCar: false, punch: false }, STEP);
+
+  if (name === 'mission') {
+    // Drive into the café waypoint so The Drop completes for real: cash +$400,
+    // the toast, the next mission arming behind it.
+    const wp = missionWaypoint(state);
+    runUntil(state, wp, Math.floor(20 / STEP), (st) => st.missionIndex > shot.mission);
+    runUntil(state, { x: 170, z: 140 }, 40, null);
+  } else if (name === 'downtown') {
+    const wp = missionWaypoint(state);
+    runUntil(state, wp, Math.floor(DRIVE_SECONDS / STEP), null);
+  } else if (name === 'beach') {
+    runUntil(state, { x: 196, z: -40 }, Math.floor(DRIVE_SECONDS / STEP), null);
+  } else {
+    runUntil(state, { x: 120, z: 84 }, Math.floor(DRIVE_SECONDS / STEP), null);
+  }
+
+  const car = state.player.car;
+  const heading = car ? car.heading : Math.PI / 2;
+  return {
+    screen: 'play',
+    camYaw: heading + shot.camAhead,
+    camPitch: shot.camPitch,
+    camDist: shot.camDist,
+  };
 }
+
+export { createWorld };

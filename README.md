@@ -1,15 +1,57 @@
-# Solmar Bay — an open-world 3D crime game
+# Solmar Bay — an open-world getaway
 
-[![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
-[![reward](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
+Mara Voss, getaway driver, owes the Solmar syndicate one last job. Five missions
+stand between her and a clean slate — in a coastal city that never stops watching.
 
-Solmar Bay is a sun-soaked open-world crime game that runs offline in a desktop browser. You are Mara Voss, a getaway driver who owes the syndicate one last debt: steal a car, run five story missions across the city, lose the cops, and clear the debt.
+## The game
 
-The city has traffic and pedestrians, cars to steal and drive, a wanted level with police cars and foot cops who chase you, combat on foot, a HUD with a minimap, a start screen and a save that remembers your cash and your mission.
+- **A city to explore on foot and by car**: a seeded grid city with downtown towers,
+  a beach road, sand, sea and a lighthouse — all of it deterministic from `?seed=N`.
+- **Traffic and pedestrians**: cars follow the road grid, slow for the car ahead and
+  overtake when stuck; people walk the sidewalks and run when the city gets loud.
+- **Cars to steal and drive**: press E near any car to borrow it (the law notices),
+  E again to step out. W/S accelerate and brake, A/D steer, Space is the handbrake.
+- **A wanted level and police who respond**: 0–5 stars. Cruisers chase from behind
+  and ram; foot cops close in when you're on foot. Get caught and you're busted.
+- **Missions and a story**: First Wheels, The Drop, Hot Pursuit, The Getaway and the
+  Solmar Run — each with a waypoint beacon, a live objective and a payout. Finish
+  the story for a bonus and free roam.
+- **Combat**: F throws a punch. Pedestrians run; cops remember.
+- **HUD with a minimap**: cash, wanted stars, objective and distance, speed, context
+  prompts, toasts — and a live 2D minimap with roads, sea, police dots and the waypoint.
+- **Start screen and a save**: title, pause and busted screens; cash and mission
+  progress persist in localStorage.
+- **Sound, synthesized**: an engine hum, a two-tone siren, crashes, a mission jingle
+  and a punch — all Web Audio, no audio files.
 
-Play it with `node serve.ts` and open http://localhost:8080 in desktop Chrome.
+## Controls
 
-Controls: W A S D to walk and drive, E to enter or steal a car, F to punch, Space for the handbrake, Shift to sprint, drag the mouse to look around, P to pause, M to mute.
+| Key | Action |
+| --- | --- |
+| WASD / arrows | Move on foot, drive in a car |
+| E | Steal / exit a car |
+| F | Punch |
+| Space | Handbrake |
+| Shift | Run |
+| Mouse drag / wheel | Look around / zoom |
+| Esc | Pause |
+| Enter | Start / continue |
 
-Built for the make.fun bounty — join with my referral: https://make.fun/r/1dmvtzwc
+## Run it
+
+Serve `game/` with any static server (for example `node serve.ts`, then open
+http://localhost:8080) and play in desktop Chrome. No network requests: every
+script and the vendored three.js build are files under `game/`.
+
+Hand it in with `mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts`, which
+copies `game/` and `screenshots/` to the output directory and writes `dossier.json`.
+
+## Screenshots
+
+Four real renders of the game itself, staged by `?shot=` with an autopilot that
+plays the real rules forward: the cover chase, downtown, a mission completing,
+and the beach road. See `shots.json` for the scene each one stages.
+
+## License
+
+MIT — see LICENSE.

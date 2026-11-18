@@ -1,104 +1,129 @@
-// The HUD: the cash and wanted stars, the mission objective, the contextual prompt, the
-// speed and the toasts as DOM text, and the minimap as a small 2D canvas — the road grid,
-// the sea, the player arrow, police in red and the waypoint in yellow. It reads the world's
-// state and paints it; it never owns any rules.
-import { CITY } from './config.js';
+// The DOM HUD: cash and wanted stars, the mission objective, the context prompt,
+// the speedometer, toasts, and the 2D minimap that shows the city, the sea, the
+// player, the police and the waypoint at a glance.
+import { GRID, MISSIONS } from './config.js';
+import { missionWaypoint, objectiveText } from './missions.js';
 
-function stars(wanted) {
-  return '★'.repeat(wanted) + '☆'.repeat(Math.max(0, 5 - wanted));
-}
+const MAP_SIZE = 200;
 
-export function createHud(world, missions) {
-  const cashEl = document.getElementById('cash');
-  const starsEl = document.getElementById('wanted');
-  const objectiveEl = document.getElementById('objective');
-  const distanceEl = document.getElementById('distance');
-  const promptEl = document.getElementById('prompt');
-  const speedEl = document.getElementById('speed');
-  const toastEl = document.getElementById('toast');
-  const mapCanvas = document.getElementById('minimap');
-  const mapCtx = mapCanvas.getContext('2d');
+/** Grab the HUD elements from the page and return an updater. */
+export function createHud() {
+  const cash = document.getElementById('cash');
+  const stars = document.getElementById('stars');
+  const objective = document.getElementById('objective');
+  const prompt = document.getElementById('prompt');
+  const speed = document.getElementById('speed');
+  const toast = document.getElementById('toast');
+  const map = document.getElementById('minimap');
+  const mapCtx = map.getContext('2d');
+  const title = document.getElementById('title');
+  const pause = document.getElementById('pause');
+  const busted = document.getElementById('busted');
+  const bustedReason = document.getElementById('busted-reason');
+  const storyLine = document.getElementById('story-line');
 
-  function drawMinimap(state) {
-    const size = mapCanvas.width;
-    const scale = size / 420; // The map covers x -200..200 and z -220..200.
-    const toX = (x) => (x + 200) * scale;
-    const toY = (z) => (z + 220) * scale;
-    mapCtx.fillStyle = '#1f6d8a';
-    mapCtx.fillRect(0, 0, size, size);
-    mapCtx.fillStyle = '#e8d29a';
-    mapCtx.fillRect(0, toY(CITY.sandFrom), size, (CITY.sandTo - CITY.sandFrom) * scale);
-    mapCtx.fillStyle = '#8a8f96';
-    mapCtx.fillRect(0, 0, size, toY(CITY.sandFrom));
-    mapCtx.strokeStyle = '#3a3f46';
-    mapCtx.lineWidth = Math.max(2, CITY.roadWidth * scale);
-    for (const line of CITY.avenues) {
-      mapCtx.beginPath();
-      mapCtx.moveTo(toX(line), toY(-CITY.half));
-      mapCtx.lineTo(toX(line), toY(CITY.half));
-      mapCtx.stroke();
-    }
-    for (const line of CITY.streets) {
-      mapCtx.beginPath();
-      mapCtx.moveTo(toX(-CITY.half), toY(line));
-      mapCtx.lineTo(toX(CITY.half), toY(line));
-      mapCtx.stroke();
-    }
-    const waypoint = state.waypoint;
-    if (waypoint) {
-      mapCtx.fillStyle = '#ffd23d';
-      mapCtx.beginPath();
-      mapCtx.moveTo(toX(waypoint.x), toY(waypoint.z) - 6);
-      mapCtx.lineTo(toX(waypoint.x) + 6, toY(waypoint.z));
-      mapCtx.lineTo(toX(waypoint.x), toY(waypoint.z) + 6);
-      mapCtx.lineTo(toX(waypoint.x) - 6, toY(waypoint.z));
-      mapCtx.closePath();
-      mapCtx.fill();
-    }
-    for (const car of state.cars) {
-      mapCtx.fillStyle = car.state === 'police' ? '#ff5252' : '#d8d2c2';
-      mapCtx.beginPath();
-      mapCtx.arc(toX(car.x), toY(car.z), car.state === 'police' ? 3.5 : 2, 0, Math.PI * 2);
-      mapCtx.fill();
-    }
-    const player = state.player;
-    mapCtx.save();
-    mapCtx.translate(toX(player.x), toY(player.z));
-    // The arrow is drawn pointing up (-y); rotate it to the player's heading, where
-    // heading 0 faces +z (down on this map) and grows clockwise.
-    mapCtx.rotate(Math.PI - player.heading);
-    mapCtx.fillStyle = '#ffffff';
-    mapCtx.beginPath();
-    mapCtx.moveTo(0, -6);
-    mapCtx.lineTo(4.5, 5);
-    mapCtx.lineTo(-4.5, 5);
-    mapCtx.closePath();
-    mapCtx.fill();
-    mapCtx.restore();
+  function starRow(wanted) {
+    let out = '';
+    for (let i = 0; i < 5; i += 1) out += i < wanted ? '★' : '☆';
+    return out;
   }
 
-  /** Refresh every HUD element from the current state. */
-  function update() {
-    const state = world.state;
-    cashEl.textContent = `$${state.cash}`;
-    starsEl.textContent = stars(state.wanted);
-    starsEl.style.opacity = state.wanted > 0 ? '1' : '0.45';
-    objectiveEl.textContent = missions.objectiveText();
-    const distance = missions.distanceToWaypoint();
-    distanceEl.textContent = distance === null ? '' : `${distance} m`;
-    const player = state.player;
-    if (!player.onFoot) {
-      speedEl.textContent = `${Math.round(Math.abs(player.speed) * 3.6)} km/h`;
-      promptEl.textContent = 'E — Exit car    Space — Handbrake';
-    } else {
-      speedEl.textContent = '';
-      const car = world.nearestCar(player.x, player.z, 3.6, ['traffic', 'parked']);
-      if (car) promptEl.textContent = car.state === 'traffic' ? 'E — Steal car' : 'E — Enter car';
-      else promptEl.textContent = 'F — Punch    Shift — Sprint';
+  /** Draw the minimap: roads, beach, sea, player arrow, police, waypoint. */
+  function drawMap(state) {
+    const g = mapCtx;
+    const span = GRID.max - GRID.min + 90;
+    const scale = MAP_SIZE / span;
+    const toMapX = (x) => (x - GRID.min + 45) * scale;
+    const toMapZ = (z) => (z - GRID.min + 45) * scale;
+    g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+    g.fillStyle = '#5d666e';
+    g.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
+    // Sea on the east edge, sand beside it.
+    g.fillStyle = '#2f7fc2';
+    g.fillRect(toMapX(GRID.seaX), 0, MAP_SIZE - toMapX(GRID.seaX), MAP_SIZE);
+    g.fillStyle = '#e8d49a';
+    g.fillRect(toMapX(GRID.beachX), 0, toMapX(GRID.seaX) - toMapX(GRID.beachX), MAP_SIZE);
+    // Roads.
+    g.strokeStyle = '#2c2f34';
+    g.lineWidth = Math.max(2, 12 * scale);
+    for (const r of GRID.roads) {
+      g.beginPath();
+      g.moveTo(toMapX(r), 0);
+      g.lineTo(toMapX(r), MAP_SIZE);
+      g.stroke();
+      g.beginPath();
+      g.moveTo(0, toMapZ(r));
+      g.lineTo(MAP_SIZE, toMapZ(r));
+      g.stroke();
     }
-    toastEl.textContent = state.toast;
-    toastEl.style.opacity = state.toast ? '1' : '0';
-    drawMinimap(state);
+    // Waypoint diamond.
+    const wp = missionWaypoint(state);
+    if (wp) {
+      g.fillStyle = '#f5d90a';
+      const wx = toMapX(wp.x);
+      const wz = toMapZ(wp.z);
+      g.beginPath();
+      g.moveTo(wx, wz - 7);
+      g.lineTo(wx + 6, wz);
+      g.lineTo(wx, wz + 7);
+      g.lineTo(wx - 6, wz);
+      g.closePath();
+      g.fill();
+    }
+    // Police dots.
+    g.fillStyle = '#ff3b30';
+    for (const car of state.cars) {
+      if (car.kind !== 'police') continue;
+      g.beginPath();
+      g.arc(toMapX(car.x), toMapZ(car.z), 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    // Player arrow, pointing where the player faces.
+    const p = state.player;
+    const px = toMapX(p.x);
+    const pz = toMapZ(p.z);
+    g.save();
+    g.translate(px, pz);
+    g.rotate(Math.atan2(Math.sin(p.heading), -Math.cos(p.heading)) + Math.PI);
+    g.fillStyle = '#ffffff';
+    g.strokeStyle = '#222222';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(0, -7);
+    g.lineTo(5, 6);
+    g.lineTo(0, 3);
+    g.lineTo(-5, 6);
+    g.closePath();
+    g.fill();
+    g.stroke();
+    g.restore();
+  }
+
+  /** Refresh every HUD element from the world state. */
+  function update(state, screen) {
+    cash.textContent = `$${state.cash}`;
+    stars.textContent = starRow(state.wanted);
+    stars.classList.toggle('hot', state.wanted > 0);
+    objective.textContent = objectiveText(state);
+    const car = state.player.car;
+    if (state.player.onFoot) {
+      prompt.textContent = 'E — Enter car    F — Punch    Shift — Run';
+    } else {
+      prompt.textContent = 'E — Exit car    Space — Handbrake';
+    }
+    const kmh = Math.round(Math.abs(car ? car.speed : state.player.speed) * 3.6);
+    speed.textContent = `${kmh} km/h`;
+    toast.textContent = state.toast.text;
+    toast.classList.toggle('show', state.toast.text.length > 0);
+    title.classList.toggle('hidden', screen !== 'title');
+    pause.classList.toggle('hidden', screen !== 'paused');
+    busted.classList.toggle('hidden', screen !== 'busted');
+    if (screen === 'busted') bustedReason.textContent = state.busted.reason;
+    const done = state.stats.missionsDone;
+    storyLine.textContent = done >= MISSIONS.length
+      ? 'Story complete — free roam.'
+      : `Missions done: ${done} / ${MISSIONS.length}`;
+    drawMap(state);
   }
 
   return { update };
