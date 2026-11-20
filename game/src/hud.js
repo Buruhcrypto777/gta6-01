@@ -1,130 +1,115 @@
-// The DOM HUD: cash and wanted stars, the mission objective, the context prompt,
-// the speedometer, toasts, and the 2D minimap that shows the city, the sea, the
-// player, the police and the waypoint at a glance.
-import { GRID, MISSIONS } from './config.js';
-import { missionWaypoint, objectiveText } from './missions.js';
+// Solmar Bay — the HUD: cash and wanted stars, the mission objective with
+// distance and timer, a live 2D minimap with markers, speed, health, radio
+// and street name, toasts, and the start / pause / busted / wasted menus.
+// All DOM, so it stays crisp in screenshots.
+import { CFG } from './config.js';
+import { streetNameAt, districtAt } from './city.js';
 
-const MAP_SIZE = 200;
+export function createHud(G) {
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    cash: $('cash'), stars: $('stars'), objective: $('objective'), distance: $('distance'),
+    timer: $('timer'), speed: $('speed'), speedUnit: $('speed-unit'), hint: $('hint'),
+    toast: $('toast'), health: $('health'), healthFill: $('health-fill'), radio: $('radio'),
+    street: $('street'), minimap: $('minimap'),
+    start: $('menu-start'), pause: $('menu-pause'), busted: $('menu-busted'), wasted: $('menu-wasted'),
+  };
+  const mm = els.minimap.getContext('2d');
+  const MM = 220, SCALE = MM / (CFG.worldHalf * 2);
+  const toMm = (v) => (v + CFG.worldHalf) * SCALE;
+  let toastTimer = null;
+  let lastMini = 0;
 
-/** Grab the HUD elements from the page and return an updater. */
-export function createHud() {
-  const cash = document.getElementById('cash');
-  const stars = document.getElementById('stars');
-  const objective = document.getElementById('objective');
-  const prompt = document.getElementById('prompt');
-  const speed = document.getElementById('speed');
-  const toast = document.getElementById('toast');
-  const map = document.getElementById('minimap');
-  const mapCtx = map.getContext('2d');
-  const title = document.getElementById('title');
-  const pause = document.getElementById('pause');
-  const busted = document.getElementById('busted');
-  const bustedReason = document.getElementById('busted-reason');
-  const storyLine = document.getElementById('story-line');
-
-  function starRow(wanted) {
-    let out = '';
-    for (let i = 0; i < 5; i += 1) out += i < wanted ? '★' : '☆';
-    return out;
-  }
-
-  /** Draw the minimap: roads, beach, sea, player arrow, police, waypoint. */
-  function drawMap(state) {
-    const g = mapCtx;
-    const span = GRID.max - GRID.min + 90;
-    const scale = MAP_SIZE / span;
-    const toMapX = (x) => (x - GRID.min + 45) * scale;
-    const toMapZ = (z) => (z - GRID.min + 45) * scale;
-    g.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
-    g.fillStyle = '#5d666e';
-    g.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
-    // Sea on the east edge, sand beside it.
-    g.fillStyle = '#2f7fc2';
-    g.fillRect(toMapX(GRID.seaX), 0, MAP_SIZE - toMapX(GRID.seaX), MAP_SIZE);
-    g.fillStyle = '#e8d49a';
-    g.fillRect(toMapX(GRID.beachX), 0, toMapX(GRID.seaX) - toMapX(GRID.beachX), MAP_SIZE);
+  function drawMinimap() {
+    const w = G.world;
+    mm.fillStyle = '#20242a'; mm.fillRect(0, 0, MM, MM);
+    // Water and sand.
+    mm.fillStyle = '#1d7f9e'; mm.fillRect(0, 0, toMm(CFG.oceanEdge), MM);
+    mm.fillRect(0, toMm(CFG.marinaEdge), MM, MM - toMm(CFG.marinaEdge));
+    mm.fillStyle = '#e8cf9a'; mm.fillRect(toMm(CFG.oceanEdge), 0, toMm(CFG.beachEdge) - toMm(CFG.oceanEdge), MM);
+    // Parks.
+    mm.fillStyle = '#6fae5e';
+    for (const p of w.parks) mm.fillRect(toMm(p.x - p.w / 2), toMm(p.z - p.d / 2), p.w * SCALE, p.d * SCALE);
     // Roads.
-    g.strokeStyle = '#2c2f34';
-    g.lineWidth = Math.max(2, 12 * scale);
-    for (const r of GRID.roads) {
-      g.beginPath();
-      g.moveTo(toMapX(r), 0);
-      g.lineTo(toMapX(r), MAP_SIZE);
-      g.stroke();
-      g.beginPath();
-      g.moveTo(0, toMapZ(r));
-      g.lineTo(MAP_SIZE, toMapZ(r));
-      g.stroke();
+    mm.strokeStyle = '#4a5058'; mm.lineWidth = 2.4;
+    for (const l of [-1120, -960, -800, -640, -480, -320, -160, 0, 160, 320, 480, 640, 800, 960, 1120]) {
+      mm.beginPath(); mm.moveTo(toMm(l), 0); mm.lineTo(toMm(l), MM); mm.stroke();
+      mm.beginPath(); mm.moveTo(0, toMm(l)); mm.lineTo(MM, toMm(l)); mm.stroke();
     }
-    // Waypoint diamond.
-    const wp = missionWaypoint(state);
-    if (wp) {
-      g.fillStyle = '#f5d90a';
-      const wx = toMapX(wp.x);
-      const wz = toMapZ(wp.z);
-      g.beginPath();
-      g.moveTo(wx, wz - 7);
-      g.lineTo(wx + 6, wz);
-      g.lineTo(wx, wz + 7);
-      g.lineTo(wx - 6, wz);
-      g.closePath();
-      g.fill();
+    // Coins.
+    mm.fillStyle = '#ffc93c';
+    for (const c of G.collectibles.coins) if (!c.taken) { mm.beginPath(); mm.arc(toMm(c.x), toMm(c.z), 2, 0, 7); mm.fill(); }
+    // Mission target.
+    const target = (G.missions.current && G.missions.st && G.missions.st.target) || (G.missions.taxi && G.missions.taxi.target);
+    if (target) {
+      mm.save(); mm.translate(toMm(target.x), toMm(target.z)); mm.rotate(Math.PI / 4);
+      mm.fillStyle = '#ffc93c'; mm.fillRect(-4, -4, 8, 8); mm.restore();
     }
-    // Police dots.
-    g.fillStyle = '#ff3b30';
-    for (const car of state.cars) {
-      if (car.kind !== 'police') continue;
-      g.beginPath();
-      g.arc(toMapX(car.x), toMapZ(car.z), 3, 0, Math.PI * 2);
-      g.fill();
-    }
-    // Player arrow, pointing where the player faces.
-    const p = state.player;
-    const px = toMapX(p.x);
-    const pz = toMapZ(p.z);
-    g.save();
-    g.translate(px, pz);
-    g.rotate(Math.atan2(Math.sin(p.heading), -Math.cos(p.heading)) + Math.PI);
-    g.fillStyle = '#ffffff';
-    g.strokeStyle = '#222222';
-    g.lineWidth = 1;
-    g.beginPath();
-    g.moveTo(0, -7);
-    g.lineTo(5, 6);
-    g.lineTo(0, 3);
-    g.lineTo(-5, 6);
-    g.closePath();
-    g.fill();
-    g.stroke();
-    g.restore();
+    // Police.
+    mm.fillStyle = '#ff3b30';
+    for (const c of G.police.state.cars) { mm.beginPath(); mm.arc(toMm(c.x), toMm(c.z), 3, 0, 7); mm.fill(); }
+    if (G.police.state.heli) { mm.beginPath(); mm.arc(toMm(G.police.state.heli.x), toMm(G.police.state.heli.z), 4, 0, 7); mm.fill(); }
+    // Player arrow.
+    mm.save();
+    mm.translate(toMm(G.player.pos.x), toMm(G.player.pos.z));
+    mm.rotate(-G.player.heading);
+    mm.fillStyle = '#ffffff'; mm.strokeStyle = '#111111'; mm.lineWidth = 1;
+    mm.beginPath(); mm.moveTo(0, -7); mm.lineTo(5, 6); mm.lineTo(-5, 6); mm.closePath(); mm.fill(); mm.stroke();
+    mm.restore();
   }
 
-  /** Refresh every HUD element from the world state. */
-  function update(state, screen) {
-    cash.textContent = `$${state.cash}`;
-    stars.textContent = starRow(state.wanted);
-    stars.classList.toggle('hot', state.wanted > 0);
-    objective.textContent = objectiveText(state);
-    const car = state.player.car;
-    if (state.player.onFoot) {
-      prompt.textContent = 'E — Enter car    F — Punch    Shift — Run';
-    } else {
-      prompt.textContent = 'E — Exit car    Space — Handbrake';
-    }
-    const kmh = Math.round(Math.abs(car ? car.speed : state.player.speed) * 3.6);
-    speed.textContent = `${kmh} km/h`;
-    toast.textContent = state.toast.text;
-    toast.classList.toggle('show', state.toast.text.length > 0);
-    title.classList.toggle('hidden', screen !== 'title');
-    pause.classList.toggle('hidden', screen !== 'paused');
-    busted.classList.toggle('hidden', screen !== 'busted');
-    if (screen === 'busted') bustedReason.textContent = state.busted.reason;
-    const done = state.stats.missionsDone;
-    storyLine.textContent = done >= MISSIONS.length
-      ? 'Story complete — free roam.'
-      : `Missions done: ${done} / ${MISSIONS.length}`;
-    drawMap(state);
-  }
-
-  return { update };
+  return {
+    setCash(n) { els.cash.textContent = `$${Math.floor(n).toLocaleString('en-US')}`; },
+    setWanted(n) {
+      let s = '';
+      for (let i = 0; i < 5; i++) s += `<span class="${i < n ? 'on' : ''}">★</span>`;
+      els.stars.innerHTML = s;
+    },
+    setObjective(t) { els.objective.textContent = t; },
+    setDistance(label, m) { els.distance.textContent = label ? `${label} — ${m} m` : ''; },
+    setTimer(sec) {
+      if (sec === null || sec === undefined) { els.timer.textContent = ''; return; }
+      els.timer.textContent = `⏱ ${sec}s`;
+    },
+    setSpeed(kmh) {
+      els.speed.textContent = Math.round(kmh);
+      els.speedUnit.style.display = G.player.car ? 'inline' : 'none';
+      els.speed.style.display = G.player.car ? 'inline' : 'none';
+    },
+    setHealth(h) {
+      els.health.style.display = G.player.car ? 'none' : 'block';
+      els.healthFill.style.width = `${Math.max(0, h)}%`;
+    },
+    setHint(t) { els.hint.textContent = t; },
+    setRadio(name) { els.radio.textContent = `♪ ${name}`; },
+    toast(text) {
+      els.toast.textContent = text;
+      els.toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => els.toast.classList.remove('show'), 3200);
+    },
+    showStart() { els.start.style.display = 'flex'; },
+    hideStart() { els.start.style.display = 'none'; },
+    showPause() { els.pause.style.display = 'flex'; },
+    hidePause() { els.pause.style.display = 'none'; },
+    showBusted() { els.busted.style.display = 'flex'; },
+    hideBusted() { els.busted.style.display = 'none'; },
+    showWasted() { els.wasted.style.display = 'flex'; },
+    hideWasted() { els.wasted.style.display = 'none'; },
+    update(dt, time) {
+      els.street.textContent = `${districtAt(G.player.pos.x, G.player.pos.z).name} · ${streetNameAt(G.player.pos.x, G.player.pos.z)}`;
+      // Health bar only on foot; it must not linger over the speedo in a car.
+      this.setHealth(G.player.health);
+      if (time - lastMini > 0.12) { lastMini = time; drawMinimap(); }
+      // Context hint for stealing a car.
+      if (G.player.onFoot) {
+        const near = G.traffic.nearest(G.player.pos.x, G.player.pos.z, 5) || G.parked.nearest(G.player.pos.x, G.player.pos.z, 5);
+        if (near) this.setHint('E — Steal car');
+        else if (G.missions.current) this.setHint('F — Punch · M — Mission · Esc — Pause');
+        else this.setHint('WASD — Move · E — Steal car · F — Punch · M — Mission');
+      } else {
+        this.setHint('E — Exit car · Space — Handbrake · M — Radio · Esc — Pause');
+      }
+    },
+  };
 }

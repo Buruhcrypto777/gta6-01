@@ -3,63 +3,86 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — an open-world getaway</title>
+<title>Solmar Bay — Open World Crime Game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .hud { position: fixed; color: #f2f4f6; text-shadow: 0 1px 3px rgba(0,0,0,.8); pointer-events: none; z-index: 5; }
-  #topleft { top: 14px; left: 16px; font-size: 26px; font-weight: 700; }
-  #cash { color: #7be495; }
-  #stars { color: #ff5a4e; letter-spacing: 2px; font-size: 24px; }
-  #stars.hot { animation: pulse 0.9s infinite alternate; }
-  @keyframes pulse { from { opacity: 1; } to { opacity: 0.45; } }
-  #objective { top: 12px; left: 50%; transform: translateX(-50%); text-align: center; font-size: 17px; font-weight: 600; max-width: 60vw; }
-  #minimap { top: 14px; right: 16px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.55); border-radius: 6px; background: #5d666e; }
-  #prompt { bottom: 64px; left: 50%; transform: translateX(-50%); font-size: 15px; background: rgba(0,0,0,.55); padding: 6px 14px; border-radius: 20px; }
-  #speed { bottom: 16px; right: 20px; font-size: 30px; font-weight: 800; }
-  #toast { top: 96px; left: 50%; transform: translateX(-50%); font-size: 19px; font-weight: 700; color: #f5c542; opacity: 0; transition: opacity .3s; text-align: center; max-width: 80vw; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; font-family: "Segoe UI", Arial, Helvetica, sans-serif; }
+  #game { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); z-index: 5; }
+  #top-left { position: absolute; top: 14px; left: 16px; display: flex; align-items: center; gap: 12px; }
+  #cash { font-size: 26px; font-weight: 800; color: #7dff5e; letter-spacing: .5px; }
+  #stars { font-size: 24px; letter-spacing: 2px; }
+  #stars span { color: rgba(255,255,255,.25); }
+  #stars span.on { color: #ff3b30; }
+  #top-center { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; }
+  #objective { font-size: 19px; font-weight: 700; background: rgba(0,0,0,.45); padding: 6px 16px; border-radius: 20px; }
+  #distance { font-size: 15px; margin-top: 4px; color: #ffd27a; font-weight: 600; }
+  #timer { font-size: 22px; font-weight: 800; margin-top: 4px; color: #ff5e5e; }
+  #minimap { position: absolute; top: 14px; right: 16px; width: 220px; height: 220px; border: 3px solid rgba(255,255,255,.85); border-radius: 6px; background: #20242a; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  #speedo { position: absolute; right: 20px; bottom: 18px; font-size: 34px; font-weight: 800; text-align: right; }
+  #speed-unit { font-size: 16px; font-weight: 600; color: #ffd27a; }
+  #hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 15px; background: rgba(0,0,0,.55); padding: 7px 16px; border-radius: 18px; white-space: nowrap; }
+  #toast { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 24px; font-weight: 800; color: #ffd27a; background: rgba(0,0,0,.55); padding: 10px 22px; border-radius: 10px; opacity: 0; transition: opacity .3s; text-align: center; max-width: 80vw; }
   #toast.show { opacity: 1; }
-  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #f2f4f6; background: rgba(8, 14, 26, 0.72); z-index: 10; }
-  .overlay.hidden { display: none; }
-  .overlay h1 { font-size: 64px; margin: 0 0 4px; letter-spacing: 6px; color: #f5c542; text-shadow: 0 3px 18px rgba(0,0,0,.7); }
-  .overlay h2 { font-size: 30px; margin: 0 0 12px; letter-spacing: 2px; }
-  .overlay p { font-size: 17px; max-width: 560px; margin: 6px 0; line-height: 1.5; }
-  .overlay .keys { font-size: 15px; color: #c8d2dc; }
-  .overlay .cta { margin-top: 18px; font-size: 19px; font-weight: 700; color: #7be495; }
-  #busted h1 { color: #ff5a4e; }
+  #health { position: absolute; left: 16px; bottom: 52px; width: 180px; height: 12px; background: rgba(0,0,0,.55); border-radius: 6px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3b30, #ff9500); transition: width .2s; }
+  #radio { position: absolute; left: 16px; bottom: 26px; font-size: 14px; color: #ffd27a; font-weight: 600; }
+  #street { position: absolute; left: 16px; bottom: 78px; font-size: 14px; color: rgba(255,255,255,.85); }
+  .menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; z-index: 10; background: linear-gradient(160deg, rgba(20,10,30,.88), rgba(60,20,10,.88)); color: #fff; text-align: center; padding: 24px; }
+  .menu h1 { font-size: 64px; letter-spacing: 6px; color: #ffd27a; text-shadow: 0 4px 24px rgba(255,180,80,.6); }
+  .menu h2 { font-size: 30px; margin: 8px 0 16px; color: #ff8a5e; }
+  .menu p { max-width: 640px; font-size: 17px; line-height: 1.55; color: rgba(255,255,255,.9); }
+  .menu .controls { margin: 18px 0; font-size: 15px; line-height: 1.9; background: rgba(0,0,0,.4); padding: 12px 22px; border-radius: 10px; }
+  .menu .controls b { color: #ffd27a; }
+  .menu button { pointer-events: auto; cursor: pointer; margin: 6px; padding: 13px 30px; font-size: 18px; font-weight: 700; color: #1a1210; background: #ffd27a; border: none; border-radius: 30px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .menu button:hover { background: #ffe1a0; }
+  .menu button.ghost { background: rgba(255,255,255,.16); color: #fff; }
+  #error { position: fixed; left: 12px; top: 50%; z-index: 20; display: none; max-width: 70vw; background: #7a1010; color: #fff; padding: 12px 16px; border-radius: 8px; font: 14px monospace; white-space: pre-wrap; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Solmar Bay: an open-world getaway game"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
-<div class="hud" id="topleft"><span id="cash">$0</span> <span id="stars">☆☆☆☆☆</span></div>
-<div class="hud" id="objective"></div>
-<canvas class="hud" id="minimap" width="200" height="200"></canvas>
-<div class="hud" id="prompt"></div>
-<div class="hud" id="speed">0 km/h</div>
-<div class="hud" id="toast"></div>
-<div class="overlay" id="title">
+<canvas id="game"></canvas>
+<div id="hud">
+  <div id="top-left"><span id="cash">$0</span><span id="stars"></span></div>
+  <div id="top-center"><div id="objective"></div><div id="distance"></div><div id="timer"></div></div>
+  <canvas id="minimap" width="220" height="220"></canvas>
+  <div id="speedo"><span id="speed">0</span><span id="speed-unit"> km/h</span></div>
+  <div id="hint"></div>
+  <div id="toast"></div>
+  <div id="health"><div id="health-fill"></div></div>
+  <div id="radio"></div>
+  <div id="street"></div>
+</div>
+<div id="menu-start" class="menu">
   <h1>SOLMAR BAY</h1>
-  <p>Mara Voss, getaway driver, owes the syndicate one last job. Five missions stand
-  between her and a clean slate — in a city that never stops watching.</p>
-  <p id="story-line">Missions done: 0 / 5</p>
-  <p class="keys">WASD — move / drive &nbsp;·&nbsp; E — steal &amp; exit cars &nbsp;·&nbsp; F — punch &nbsp;·&nbsp; Space — handbrake<br>
-  Mouse drag — look around &nbsp;·&nbsp; Wheel — zoom &nbsp;·&nbsp; Esc — pause &nbsp;·&nbsp; Shift — run</p>
-  <p class="cta">Click or press Enter to start</p>
+  <h2>A getaway driver. A sun-soaked city. One last score.</h2>
+  <p>Mara Voss drives for whoever pays. Tonight the whole city is her board: steal cars, outrun the law, settle debts at Coral Market and pull the getaway that retires her — if the cops and the helicopter don't catch her first.</p>
+  <div class="controls">
+    <b>WASD</b> move / drive &nbsp;·&nbsp; <b>E</b> steal &amp; exit car &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>Space</b> handbrake<br>
+    <b>Shift</b> sprint &nbsp;·&nbsp; <b>M</b> mission &nbsp;·&nbsp; <b>T</b> taxi job (in a taxi) &nbsp;·&nbsp; <b>R</b> radio station<br>
+    <b>Mouse drag</b> orbit camera &nbsp;·&nbsp; <b>Wheel</b> zoom &nbsp;·&nbsp; <b>Esc</b> pause
+  </div>
+  <button id="btn-start">▶ &nbsp;Start the engine</button>
+  <p style="margin-top:14px;font-size:14px;color:rgba(255,255,255,.65)">7 story missions · taxi shifts · 12 Sun Coins · wanted level 0–5 · police chases, roadblocks &amp; helicopter</p>
 </div>
-<div class="overlay hidden" id="pause">
-  <h2>PAUSED</h2>
+<div id="menu-pause" class="menu">
+  <h2>Paused</h2>
   <p>Solmar Bay waits for no one — except right now.</p>
-  <p class="cta">Press Esc or Enter to keep playing</p>
+  <div><button id="btn-resume">Resume</button><button id="btn-save" class="ghost">Save game</button></div>
+  <div><button id="btn-radio" class="ghost">Radio on / off</button><button id="btn-mute" class="ghost">Mute</button><button id="btn-restart" class="ghost">Restart</button></div>
 </div>
-<div class="overlay hidden" id="busted">
-  <h1>BUSTED</h1>
-  <p id="busted-reason"></p>
-  <p>The syndicate posts your bail. $200 lighter, back on the street.</p>
-  <p class="cta">Press Enter to continue</p>
+<div id="menu-busted" class="menu">
+  <h1 style="color:#ff3b30">BUSTED</h1>
+  <p>The Solmar Bay police took their cut. Mara walks out of the station and back to the Safehouse.</p>
+  <div><button id="btn-respawn">Back to the Safehouse</button></div>
 </div>
-<script src="./vendor/three.min.js"></script>
-<script type="module" src="./src/main.js"></script>
+<div id="menu-wasted" class="menu">
+  <h1 style="color:#ff3b30">WASTED</h1>
+  <p>Mara got flattened. The hospital bill hurts almost as much as the beating.</p>
+  <div><button id="btn-respawn2">Back to the Safehouse</button></div>
+</div>
+<div id="error"></div>
+<script src="vendor/three.min.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

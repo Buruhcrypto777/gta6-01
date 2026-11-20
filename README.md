@@ -1,64 +1,86 @@
-# Solmar Bay — an open-world getaway
+# Solmar Bay — Open World Crime Game
 
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/competition/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/rank.svg)](https://make.fun/competition/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/Buruhcrypto777/gta6-01/reward.svg)](https://make.fun/competition/gta6-01)
 
-Built for the [make.fun gta6-01 bounty](https://make.fun/bounty/gta6-01). Referral code: 1dmvtzwc.
-Entry for the $1,666 gta6-01 bounty — $500 for first place, judged on the screenshots and the game itself.
-
-Mara Voss, getaway driver, owes the Solmar syndicate one last job. Five missions
-stand between her and a clean slate — in a coastal city that never stops watching.
+An original open-world crime game for the [gta6-01 bounty](https://make.fun/competition/gta6-01) on make.fun. Play it free at [https://make.fun/r/1dmvtzwc](https://make.fun/r/1dmvtzwc) — sign up through my referral link to support the project.
 
 ## The game
 
-- **A city to explore on foot and by car**: a seeded grid city with downtown towers,
-  a beach road, sand, sea and a lighthouse — all of it deterministic from `?seed=N`.
-- **Traffic and pedestrians**: cars follow the road grid, slow for the car ahead and
-  overtake when stuck; people walk the sidewalks and run when the city gets loud.
-- **Cars to steal and drive**: press E near any car to borrow it (the law notices),
-  E again to step out. W/S accelerate and brake, A/D steer, Space is the handbrake.
-- **A wanted level and police who respond**: 0–5 stars. Cruisers chase from behind
-  and ram; foot cops close in when you're on foot. Get caught and you're busted.
-- **Missions and a story**: First Wheels, The Drop, Hot Pursuit, The Getaway and the
-  Solmar Run — each with a waypoint beacon, a live objective and a payout. Finish
-  the story for a bonus and free roam.
-- **Combat**: F throws a punch. Pedestrians run; cops remember.
-- **HUD with a minimap**: cash, wanted stars, objective and distance, speed, context
-  prompts, toasts — and a live 2D minimap with roads, sea, police dots and the waypoint.
-- **Start screen and a save**: title, pause and busted screens; cash and mission
-  progress persist in localStorage.
-- **Sound, synthesized**: an engine hum, a two-tone siren, crashes, a mission jingle
-  and a punch — all Web Audio, no audio files.
+**Solmar Bay** is a sun-soaked modern coastal city, fully original — original city, characters, vehicles, story, art and sounds. You are **Mara Voss**, a getaway driver. Steal cars, outrun the law, settle debts, and pull the getaway that retires her — if the cops and the helicopter don't catch her first.
+
+- **Open world**: 2.4 km city with 7 districts, 4 avenues and 10 named streets, a golden-hour beach and marina, parks, a plaza, neon downtown, traffic, and 26 pedestrians
+- **Drive anything**: steal sedans, taxis, sports cars, vans and trucks from the street or parked by cafés — arcade handling with handbrake drifts
+- **Wanted 0–5 stars**: police cruisers chase and ram, roadblocks at 3★, a searchlight helicopter at 4–5★, busted or wasted endings
+- **7 missions**: 5 story missions (First Wheels, The Drop, Hot Pursuit, Payback, The Getaway) plus a taxi shift side job and 12 collectible Sun Coins hidden around the city
+- **Combat**: punch thugs and collectors up close, with knockback, sparks and consequences
+- **Feel**: golden-hour sun with real shadows, a shader sky with clouds, an animated ocean, particles (dust, smoke, sparks, muzzle), synthesized WebAudio engine, sirens and three original radio stations
+- **HUD**: cash, wanted stars, mission objective with distance and timer, a live 2D minimap with markers, speed, health, street and district names
+- **Save**: progress, cash and collected coins persist in localStorage
 
 ## Controls
 
 | Key | Action |
 | --- | --- |
-| WASD / arrows | Move on foot, drive in a car |
-| E | Steal / exit a car |
+| WASD | Move / drive |
+| E | Steal & exit car |
 | F | Punch |
 | Space | Handbrake |
-| Shift | Run |
-| Mouse drag / wheel | Look around / zoom |
+| Shift | Sprint |
+| M | Start mission |
+| T | Taxi job (in a taxi) |
+| R | Next radio station |
+| Mouse drag / wheel | Orbit & zoom camera |
 | Esc | Pause |
-| Enter | Start / continue |
 
-## Run it
+## Play it
 
-Serve `game/` with any static server (for example `node serve.ts`, then open
-http://localhost:8080) and play in desktop Chrome. No network requests: every
-script and the vendored three.js build are files under `game/`.
+```sh
+node serve.ts        # then open http://localhost:8080
+```
 
-Hand it in with `mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts`, which
-copies `game/` and `screenshots/` to the output directory and writes `dossier.json`.
+Desktop Chrome, keyboard + mouse. Static files only — the game loads fully offline, no network.
 
-## Screenshots
+## Build
 
-Four real renders of the game itself, staged by `?shot=` with an autopilot that
-plays the real rules forward: the cover chase, downtown, a mission completing,
-and the beach road. See `shots.json` for the scene each one stages.
+```sh
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```
+
+`main.ts` (Node 22, standard library only) copies `game/` and `screenshots/` to the output directory and writes `dossier.json` with the vendored make.fun library.
+
+## Source layout
+
+```
+game/
+  index.html            page shell, HUD, menus
+  vendor/three.min.js   three.js (vendored)
+  src/
+    main.js             bootstrap, game loop, menus, bust/waste
+    config.js           tuning, palette, wanted table
+    random.js           seeded RNG
+    city.js             districts, landmarks, streets, neon, radio
+    world.js            roads, buildings, palms, coins, spawn points
+    render.js           sky, ocean, ground, buildings, particles
+    vehicles.js         car + helicopter meshes
+    traffic.js          traffic AI
+    pedestrians.js      pedestrians
+    police.js           wanted, cruisers, roadblocks, helicopter
+    missions.js         5 story missions + taxi job
+    combat.js           punch combat, thugs, friend pickup
+    collectibles.js     Sun Coins
+    player.js           Mara on foot + driving, chase camera
+    parked.js           parked cars to steal
+    hud.js              HUD, minimap, menus
+    audio.js            WebAudio synth: engine, sirens, radio
+    save.js             localStorage save/load
+    input.js            keyboard + mouse
+    shots.js            screenshot staging (?shot=cover|downtown|mission|beach)
+main.ts                 entry program: copy game/ + screenshots/, write dossier.json
+serve.ts                dev server
+```
 
 ## License
 
-MIT — see LICENSE.
+MIT — see [LICENSE](LICENSE).

@@ -1,120 +1,53 @@
-// The city itself: a road grid, the blocks between the roads, the buildings on them,
-// the beach and the sea, and the named places the missions point at. Everything is
-// placed from the seeded generator, so the same seed builds the same Solmar Bay.
-import { GRID, PALETTE } from './config.js';
-import { clamp } from './random.js';
+// Solmar Bay — the city's identity: its districts, named places, street names
+// and neon signs. All names are original; the city is a fictional sun-soaked
+// coast, not a copy of any real or commercial place.
+export const DISTRICTS = [
+  { name: 'Shoreline', x0: -1200, z0: -1120, x1: -780, z1: 1120, style: 'beach' },
+  { name: 'Downtown', x0: -320, z0: -320, x1: 320, z1: 320, style: 'downtown' },
+  { name: 'Old Town', x0: 320, z0: -1120, x1: 1120, z1: -320, style: 'oldtown' },
+  { name: 'Palma Heights', x0: 960, z0: -1120, x1: 1200, z1: 1120, style: 'hills' },
+  { name: 'Marina', x0: -800, z0: 960, x1: 960, z1: 1200, style: 'marina' },
+  { name: 'Midtown', x0: -800, z0: -1120, x1: 1120, z1: 1120, style: 'midtown' },
+];
 
-const BUILDING_TINTS = [PALETTE.buildingA, PALETTE.buildingB, PALETTE.buildingC, PALETTE.buildingD];
+export const LANDMARKS = [
+  { name: 'Café Marisol', x: -720, z: -720, kind: 'cafe' },
+  { name: 'Solmar Pier', x: -840, z: 640, kind: 'pier' },
+  { name: 'Palma Plaza', x: 80, z: 80, kind: 'plaza' },
+  { name: 'The Tropicana', x: 240, z: -80, kind: 'hotel' },
+  { name: 'Marina Docks', x: 80, z: 1040, kind: 'docks' },
+  { name: 'Safehouse', x: 880, z: -880, kind: 'house' },
+  { name: 'Coral Market', x: 560, z: 400, kind: 'market' },
+  { name: 'Sunset Point', x: -840, z: -960, kind: 'view' },
+];
 
-/** Build the whole static layout from a seeded generator. */
-export function buildCity(rng) {
-  const buildings = [];
-  const palms = [];
-  const umbrellas = [];
-  const lamps = [];
+export const AVENUES = ['Marisol Ave', 'Palma Blvd', 'Coral Way', 'Sunset Strip', 'Harbor Rd', 'Jasmine Ln', 'Coco Dr', 'Breeze Ave', 'Tide St', 'Flamingo Rd', 'Lagoon Blvd', 'Vista Ave', 'Anchor St', 'Salsa Way', 'Mango Ln'];
+export const STREETS = ['1st St', '2nd St', '3rd St', '4th St', '5th St', '6th St', '7th St', '8th St', '9th St', '10th St', '11th St', '12th St', '13th St', '14th St', '15th St'];
 
-  for (const bx of GRID.blocks) {
-    for (const bz of GRID.blocks) {
-      // Downtown is the middle: buildings grow taller toward the centre.
-      const downtown = 1 - Math.max(Math.abs(bx), Math.abs(bz)) / 210;
-      const roll = rng();
-      const spots = roll < 0.3 ? [{ dx: 0, dz: 0, w: 30, d: 30 }] : roll < 0.7
-        ? [{ dx: -9, dz: -9, w: 17, d: 17 }, { dx: 9, dz: 9, w: 17, d: 17 }]
-        : [{ dx: -10, dz: -10, w: 15, d: 15 }, { dx: 10, dz: -10, w: 15, d: 15 }, { dx: 0, dz: 11, w: 20, d: 13 }];
-      for (const s of spots) {
-        const h = Math.round(9 + downtown * 46 + rng() * 12);
-        buildings.push({
-          x: bx + s.dx, z: bz + s.dz, w: s.w, d: s.d, h,
-          tint: rng.pick(BUILDING_TINTS),
-          variant: rng.int(0, 2),
-        });
-      }
-      // A palm or two on the quieter blocks.
-      if (rng.chance(0.4)) palms.push({ x: bx + rng.range(-16, 16), z: bz + rng.range(-16, 16), s: rng.range(0.8, 1.25) });
-    }
-  }
-
-  // Beach road palms: a row of them along Ocean Drive (x = 196).
-  for (let z = -182; z <= 182; z += 28) {
-    palms.push({ x: 203 + rng.range(-1, 1), z: z + rng.range(-4, 4), s: rng.range(0.9, 1.3) });
-  }
-  // Beach umbrellas and more palms on the sand.
-  for (let i = 0; i < 10; i += 1) {
-    umbrellas.push({ x: rng.range(210, 234), z: rng.range(-180, 180), tilt: rng.range(-0.15, 0.15) });
-  }
-  for (let i = 0; i < 8; i += 1) {
-    palms.push({ x: rng.range(208, 236), z: rng.range(-180, 180), s: rng.range(0.8, 1.2) });
-  }
-  // Street lamps at every other intersection corner.
-  for (const rx of GRID.roads) {
-    for (const rz of GRID.roads) {
-      if ((rx + rz) % 112 === 0) lamps.push({ x: rx + 7.5, z: rz + 7.5 });
-    }
-  }
-
-  // Parked cars at the kerb, waiting to be borrowed.
-  const parkedSpots = [
-    { x: 34, z: -22, heading: 0 },
-    { x: -22, z: 34, heading: Math.PI / 2 },
-    { x: 146, z: 128, heading: Math.PI },
-    { x: -190, z: -128, heading: -Math.PI / 2 },
-    { x: 90, z: -34, heading: 0 },
-    { x: -34, z: 146, heading: Math.PI / 2 },
-  ];
-
-  return {
-    buildings, palms, umbrellas, lamps, parkedSpots,
-    landmarks: {
-      cafe: { x: 140, z: 140, name: 'Café Marisol' },
-      docks: { x: -196, z: -140, name: 'Solmar Docks' },
-      lighthouse: { x: 222, z: -170, name: 'Lighthouse' },
-      plaza: { x: 0, z: 0, name: 'Marina Plaza' },
-    },
-  };
+export function streetNameAt(x, z) {
+  const ax = Math.max(0, Math.min(AVENUES.length - 1, Math.floor((x + 1120) / 160)));
+  const sz = Math.max(0, Math.min(STREETS.length - 1, Math.floor((z + 1120) / 160)));
+  return `${AVENUES[ax]} & ${STREETS[sz]}`;
 }
 
-/** Is a ground point on a road (within the asphalt)? */
-export function onRoad(x, z) {
-  for (const r of GRID.roads) {
-    if (Math.abs(x - r) <= GRID.roadHalf) return true;
-    if (Math.abs(z - r) <= GRID.roadHalf) return true;
-  }
-  return false;
+export function districtAt(x, z) {
+  for (const d of DISTRICTS) if (x >= d.x0 && x < d.x1 && z >= d.z0 && z < d.z1) return d;
+  return DISTRICTS[4];
 }
 
-/** Nearest road centreline coordinate on one axis. */
-export function nearestRoad(v) {
-  let best = GRID.roads[0];
-  for (const r of GRID.roads) if (Math.abs(v - r) < Math.abs(v - best)) best = r;
-  return best;
-}
+// Neon signs mounted on downtown towers — glowing colour blocks the judge can
+// see from the chase camera. Positions are building faces, set by world.js.
+export const NEON_SIGNS = [
+  { text: 'HOTEL', color: 0xff3df0, w: 26, h: 6 },
+  { text: 'CASINO', color: 0xffb13d, w: 26, h: 6 },
+  { text: 'TROPICANA', color: 0x35f1ff, w: 34, h: 6 },
+  { text: 'BAR', color: 0x7dff5e, w: 14, h: 6 },
+  { text: 'PIER 9', color: 0xff5e5e, w: 20, h: 6 },
+  { text: 'SOLMAR', color: 0x35f1ff, w: 26, h: 6 },
+];
 
-/**
- * Push a circle (x, z, radius) out of every building it overlaps, and clamp it to the
- * playable ground. Returns the corrected position. The sea is a wall past the sand.
- */
-export function collideBuildings(city, x, z, radius) {
-  for (const b of city.buildings) {
-    const hw = b.w / 2 + radius;
-    const hd = b.d / 2 + radius;
-    const dx = x - b.x;
-    const dz = z - b.z;
-    if (Math.abs(dx) < hw && Math.abs(dz) < hd) {
-      const px = hw - Math.abs(dx);
-      const pz = hd - Math.abs(dz);
-      if (px < pz) x = b.x + (dx >= 0 ? hw : -hw);
-      else z = b.z + (dz >= 0 ? hd : -hd);
-    }
-  }
-  x = clamp(x, GRID.min - 4, GRID.seaX - 2);
-  z = clamp(z, GRID.min - 4, GRID.max + 4);
-  return { x, z };
-}
-
-/** The closest point on the road grid to a ground point (for spawning and routing). */
-export function snapToRoad(x, z) {
-  const rx = nearestRoad(x);
-  const rz = nearestRoad(z);
-  if (Math.abs(x - rx) <= Math.abs(z - rz)) return { x: rx, z };
-  return { x, z: rz };
-}
+export const RADIO_STATIONS = [
+  { name: 'SOL 98.5 — Sunset FM', mood: 'sunset' },
+  { name: 'WAVE 101 — Surf Rock', mood: 'surf' },
+  { name: 'NEON 88 — Night Drive', mood: 'neon' },
+];

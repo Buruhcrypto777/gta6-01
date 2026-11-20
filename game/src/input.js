@@ -1,93 +1,36 @@
-// Keyboard and mouse: held keys as a movement vector, edge-triggered actions
-// (enter a car, punch, pause, confirm), and the camera orbit from mouse drag.
-import { KEYS } from './config.js';
-
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_ENTER_CAR = 4;
-export const ACTION_PUNCH = 8;
-
-/** Wire up the listeners and return the live input state. */
+// Solmar Bay — input: keyboard state with edge-triggered presses, mouse drag
+// to orbit the camera, wheel to zoom. One frame of press memory, cleared by
+// the main loop after every update.
 export function createInput(canvas) {
   const keys = new Set();
-  let actions = 0;
-  let lookDX = 0;
-  let lookDY = 0;
-  let wheel = 0;
-  let dragging = false;
-  let lastX = 0;
-  let lastY = 0;
+  const pressedSet = new Set();
+  let dragging = false, lastX = 0, lastY = 0;
+  let orbitDX = 0, orbitDY = 0, wheelDelta = 0;
 
-  function codeIs(list, code) {
-    return list.includes(code);
-  }
-
-  window.addEventListener('keydown', (event) => {
-    if (event.repeat) return;
-    keys.add(event.code);
-    if (event.code === KEYS.confirm) actions |= ACTION_CONFIRM;
-    if (event.code === KEYS.pause) actions |= ACTION_PAUSE;
-    if (event.code === KEYS.enterCar) actions |= ACTION_ENTER_CAR;
-    if (event.code === KEYS.punch) actions |= ACTION_PUNCH;
-    if (event.code === KEYS.handbrake) event.preventDefault();
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    keys.add(e.code);
+    pressedSet.add(e.code);
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   });
-  window.addEventListener('keyup', (event) => keys.delete(event.code));
-  window.addEventListener('blur', () => keys.clear());
-
-  canvas.addEventListener('mousedown', (event) => {
-    dragging = true;
-    lastX = event.clientX;
-    lastY = event.clientY;
-  });
-  window.addEventListener('mouseup', () => { dragging = false; });
-  window.addEventListener('mousemove', (event) => {
+  window.addEventListener('keyup', (e) => keys.delete(e.code));
+  window.addEventListener('blur', () => { keys.clear(); });
+  canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    lookDX += event.clientX - lastX;
-    lookDY += event.clientY - lastY;
-    lastX = event.clientX;
-    lastY = event.clientY;
+    orbitDX += e.clientX - lastX; orbitDY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
   });
-  canvas.addEventListener('wheel', (event) => {
-    wheel += event.deltaY;
-    event.preventDefault();
-  }, { passive: false });
-  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-
-  function held(list) {
-    for (const code of list) if (keys.has(code)) return true;
-    return false;
-  }
+  const endDrag = () => { dragging = false; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', (e) => { wheelDelta += e.deltaY; e.preventDefault(); }, { passive: false });
 
   return {
-    /** Movement for this frame: forward, strafe, steer, run, handbrake. */
-    move() {
-      const fwd = (held(KEYS.up) ? 1 : 0) - (held(KEYS.down) ? 1 : 0);
-      const strafe = (held(KEYS.right) ? 1 : 0) - (held(KEYS.left) ? 1 : 0);
-      return {
-        fwd,
-        strafe,
-        steer: strafe,
-        run: keys.has(KEYS.run),
-        handbrake: keys.has(KEYS.handbrake),
-      };
-    },
-    /** Edge-triggered actions since the last take; clears them. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-    /** Mouse orbit since the last take, in pixels; clears it. */
-    takeLook() {
-      const look = { dx: lookDX, dy: lookDY, wheel };
-      lookDX = 0;
-      lookDY = 0;
-      wheel = 0;
-      return look;
-    },
-    /** Is any movement key held (for the title screen's "press a key" hint)? */
-    anyKey() {
-      return keys.size > 0;
-    },
+    key(code) { return keys.has(code); },
+    pressed(code) { return pressedSet.has(code); },
+    consumeOrbit() { const d = { dx: orbitDX, dy: orbitDY }; orbitDX = 0; orbitDY = 0; return d; },
+    consumeWheel() { const w = wheelDelta; wheelDelta = 0; return w; },
+    endFrame() { pressedSet.clear(); },
   };
 }

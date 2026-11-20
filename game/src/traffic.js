@@ -1,139 +1,134 @@
-// Traffic and pedestrians: cars that follow the road grid, and people who walk the
-// sidewalks and run when the city gets loud.
-import { GRID, PEDS, TRAFFIC } from './config.js';
-import { clamp, dist2d, wrapAngle } from './random.js';
+// Solmar Bay — traffic: civilian cars that cruise the road grid, turn at
+// intersections, slow for the car ahead and stop for pile-ups. They are the
+// city's moving furniture and the cars the player steals.
+const THREE = window.THREE;
+import { CFG } from './config.js';
+import { mulberry32, range, int, pick, chance } from './random.js';
+import { TRAFFIC_LINES } from './world.js';
+import { makeCarMesh, updateCarVisual } from './vehicles.js';
 
-/** The intersection a car is driving toward, from its current leg. */
-function legTarget(car) {
-  const route = car.route;
-  if (!route || car.leg >= route.length) return null;
-  return route[car.leg];
-}
+const TYPES = ['sedan', 'sedan', 'taxi', 'sports', 'van', 'truck', 'sedan'];
 
-/** Pick a new route: a random walk of intersections across the grid. */
-function newRoute(rng, x, z) {
-  const route = [];
-  let cx = x;
-  let cz = z;
-  for (let i = 0; i < 5; i += 1) {
-    const horizontal = rng.chance(0.5);
-    const next = rng.pick(GRID.roads);
-    if (horizontal) cx = next;
-    else cz = next;
-    route.push({ x: cx, z: cz });
-  }
-  return route;
-}
+export function createTraffic(G) {
+  const rng = mulberry32(CFG.seed + 31);
+  const cars = [];
+  const group = new THREE.Group();
+  G.scene.add(group);
 
-/** Is another car close ahead in this car's lane? */
-function carAhead(state, car) {
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  let nearest = Infinity;
-  for (const other of state.cars) {
-    if (other === car || other.kind === 'parked') continue;
-    const dx = other.x - car.x;
-    const dz = other.z - car.z;
-    const along = dx * fx + dz * fz;
-    const side = Math.abs(dx * fz - dz * fx);
-    if (along > 0 && along < TRAFFIC.followGap + 6 && side < 3.5 && along < nearest) nearest = along;
+  function spawnCar(farFromPlayer) {
+    const type = pick(rng, TYPES);
+    const color = type === 'taxi' ? CFG.palette.taxi : pick(rng, CFG.palette.car);
+    const mesh = makeCarMesh(type, color);
+    const vertical = chance(rng, 0.5);
+    const line = pick(rng, TRAFFIC_LINES);
+    const lane = (rng() < 0.5 ? -1 : 1) * 6.5;
+    const t = vertical
+      ? range(rng, CFG.gridMin + 60, CFG.marinaEdge - 60)
+      : range(rng, CFG.beachEdge + 60, CFG.gridMax - 60);
+    const heading = vertical ? (lane < 0 ? Math.PI : 0) : (lane < 0 ? -Math.PI / 2 : Math.PI / 2);
+    const car = {
+      mesh, type, vertical, line, lane,
+      x: vertical ? line + lane : t, z: vertical ? t : line + lane,
+      heading, speed: range(rng, CFG.traffic.minSpeed, CFG.traffic.maxSpeed),
+      targetSpeed: range(rng, CFG.traffic.minSpeed, CFG.traffic.maxSpeed),
+      turnAt: null, stuck: 0,
+    };
+    mesh.position.set(car.x, 0, car.z); mesh.rotation.y = car.heading;
+    group.add(mesh); cars.push(car);
+    return car;
   }
-  return nearest;
-}
 
-/** Drive one traffic car: follow its route, slow for the car ahead, overtake when stuck. */
-function stepTrafficCar(state, car, dt) {
-  if (car.kind !== 'traffic') return;
-  if (!car.route || car.leg >= car.route.length) {
-    car.route = newRoute(state.rng, car.x, car.z);
-    car.leg = 0;
-  }
-  const target = legTarget(car);
-  if (!target) return;
-  const dx = target.x - car.x;
-  const dz = target.z - car.z;
-  const dist = Math.hypot(dx, dz);
-  if (dist < 3) {
-    car.leg += 1;
-    return;
-  }
-  const wantHeading = Math.atan2(dx, dz);
-  const turn = clamp(wrapAngle(wantHeading - car.heading), -1, 1);
-  car.heading += turn * 1.8 * dt;
-  const ahead = carAhead(state, car);
-  if (ahead < TRAFFIC.followGap) {
-    car.blocked += dt;
-    car.speed = Math.max(0, car.speed - 12 * dt);
-    if (car.blocked > TRAFFIC.blockedSeconds) {
-      // Overtake: swing into the next lane over and push past.
-      car.lane = car.lane === 0 ? -4.6 : 0;
-      car.blocked = 0;
-      car.speed = Math.min(car.cruise + 4, car.speed + 6);
+  for (let i = 0; i < CFG.traffic.count; i++) spawnCar();
+
+  function carAhead(c, dist) {
+    for (const o of cars) {
+      if (o === c) continue;
+      const dx = o.x - c.x, dz = o.z - c.z;
+      const d = Math.hypot(dx, dz);
+      if (d > dist) continue;
+      const fx = -Math.sin(c.heading), fz = -Math.cos(c.heading);
+      if (dx * fx + dz * fz > 0) return o;
     }
-  } else {
-    car.blocked = 0;
-    car.speed += (car.cruise - car.speed) * Math.min(1, dt * 0.8);
-  }
-  const laneX = Math.cos(car.heading) * car.lane;
-  const laneZ = -Math.sin(car.heading) * car.lane;
-  car.x += Math.sin(car.heading) * car.speed * dt + laneX * dt * 0.5;
-  car.z += Math.cos(car.heading) * car.speed * dt + laneZ * dt * 0.5;
-}
-
-/** All traffic cars, one step. Parked and player cars are left alone. */
-export function updateTraffic(state, dt) {
-  for (const car of state.cars) stepTrafficCar(state, car, dt);
-}
-
-/** Walk the sidewalks; run from a speeding car or a raised fist. */
-export function updatePeds(state, dt) {
-  const player = state.player;
-  const playerCar = state.player.car;
-  const threatX = playerCar ? playerCar.x : player.x;
-  const threatZ = playerCar ? playerCar.z : player.z;
-  const threatFast = playerCar ? Math.abs(playerCar.speed) > 8 : false;
-  for (const ped of state.peds) {
-    if (ped.mode === 'down') {
-      ped.timer -= dt;
-      if (ped.timer <= 0) {
-        ped.mode = 'flee';
-        ped.timer = 3;
-      }
-      continue;
-    }
-    const d = dist2d(ped.x, ped.z, threatX, threatZ);
-    if (ped.mode === 'walk' && ((threatFast && d < 9) || d < 2.5)) {
-      ped.mode = 'flee';
-      ped.timer = 2.5;
-    }
-    if (ped.mode === 'flee') {
-      ped.timer -= dt;
-      const away = Math.atan2(ped.x - threatX, ped.z - threatZ);
-      ped.heading = away;
-      ped.x += Math.sin(away) * PEDS.fleeSpeed * dt;
-      ped.z += Math.cos(away) * PEDS.fleeSpeed * dt;
-      if (ped.timer <= 0) ped.mode = 'walk';
-    } else {
-      // Stroll along the sidewalk: keep to the edge of the nearest road.
-      ped.x += Math.sin(ped.heading) * ped.speed * dt;
-      ped.z += Math.cos(ped.heading) * ped.speed * dt;
-      if (!onSidewalk(ped.x, ped.z)) {
-        ped.heading += Math.PI / 2;
+    if (G.player && G.player.car) {
+      const p = G.player.car;
+      const dx = p.x - c.x, dz = p.z - c.z;
+      if (Math.hypot(dx, dz) < dist) {
+        const fx = -Math.sin(c.heading), fz = -Math.cos(c.heading);
+        if (dx * fx + dz * fz > 0) return p;
       }
     }
-    ped.x = clamp(ped.x, GRID.min - 2, GRID.seaX - 2);
-    ped.z = clamp(ped.z, GRID.min - 2, GRID.max + 2);
+    return null;
   }
-}
 
-/** Is a point on a sidewalk (just off the asphalt, inside the city)? */
-function onSidewalk(x, z) {
-  for (const r of GRID.roads) {
-    const dx = Math.abs(x - r);
-    const dz = Math.abs(z - r);
-    if ((dx >= GRID.roadHalf && dx <= GRID.roadHalf + 3.5) || (dz >= GRID.roadHalf && dz <= GRID.roadHalf + 3.5)) {
-      return true;
+  function turnIfNeeded(c, dt) {
+    // At an intersection, sometimes turn onto the crossing road.
+    const nearLine = TRAFFIC_LINES.find((l) => Math.abs((c.vertical ? c.z : c.x) - l) < 4);
+    if (nearLine === undefined || c.turnAt === nearLine) return;
+    c.turnAt = nearLine;
+    if (chance(rng, 0.4)) {
+      const turnLeft = chance(rng, 0.5);
+      if (c.vertical) {
+        const newLine = nearLine;
+        c.vertical = false; c.line = newLine;
+        c.lane = (turnLeft ? -1 : 1) * 6.5;
+        c.z = newLine + c.lane;
+        c.heading = turnLeft ? Math.PI / 2 : -Math.PI / 2;
+        c.x = THREE.MathUtils.clamp(c.x, CFG.gridMin, CFG.gridMax);
+      } else {
+        c.vertical = true; c.line = nearLine;
+        c.lane = (turnLeft ? -1 : 1) * 6.5;
+        c.x = nearLine + c.lane;
+        c.heading = turnLeft ? 0 : Math.PI;
+        c.z = THREE.MathUtils.clamp(c.z, CFG.gridMin, CFG.gridMax);
+      }
     }
   }
-  return x > GRID.beachX - 2;
+
+  return {
+    cars,
+    spawnCar,
+    nearest(x, z, r) {
+      let best = null, bd = r;
+      for (const c of cars) {
+        const d = Math.hypot(c.x - x, c.z - z);
+        if (d < bd) { bd = d; best = c; }
+      }
+      return best;
+    },
+    removeCar(car) {
+      group.remove(car.mesh);
+      const i = cars.indexOf(car); if (i >= 0) cars.splice(i, 1);
+    },
+    update(dt, time) {
+      for (const c of cars) {
+        // Keep out of the sea and the beach.
+        if (c.x < CFG.beachEdge + 8) { c.x = CFG.beachEdge + 8; c.heading = Math.PI / 2; c.vertical = false; c.line = c.z; }
+        const ahead = carAhead(c, 14);
+        const want = ahead ? 0 : c.targetSpeed;
+        c.speed += THREE.MathUtils.clamp(want - c.speed, -18 * dt, 8 * dt);
+        if (c.speed < 0.1 && ahead) c.stuck += dt; else c.stuck = 0;
+        if (c.stuck > 6) { // nudge around a jam
+          c.speed = 4; c.stuck = 0;
+          if (c.vertical) c.x += (rng() < 0.5 ? -1 : 1) * 3; else c.z += (rng() < 0.5 ? -1 : 1) * 3;
+        }
+        const fx = -Math.sin(c.heading), fz = -Math.cos(c.heading);
+        c.x += fx * c.speed * dt; c.z += fz * c.speed * dt;
+        // Wrap around the land edges (never into the sea).
+        if (c.vertical) {
+          if (c.z > CFG.marinaEdge - 40) c.z = CFG.gridMin - 40;
+          if (c.z < CFG.gridMin - 40) c.z = CFG.marinaEdge - 40;
+        } else {
+          if (c.x > CFG.gridMax + 40) c.x = CFG.beachEdge + 40;
+          if (c.x < CFG.beachEdge + 40) c.x = CFG.gridMax + 40;
+        }
+        turnIfNeeded(c, dt);
+        c.mesh.position.set(c.x, 0, c.z);
+        c.mesh.rotation.y = c.heading;
+        updateCarVisual(c.mesh, 0, c.speed, dt, time);
+        if (Math.abs(c.speed) > 14 && Math.random() < dt * 0.4) G.particles.dust(c.x, 0.3, c.z);
+      }
+      // Keep the count topped up.
+      if (cars.length < CFG.traffic.count && Math.random() < dt * 0.2) spawnCar();
+    },
+  };
 }

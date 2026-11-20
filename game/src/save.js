@@ -1,30 +1,33 @@
-// Save and load: cash and mission progress in localStorage, nothing else.
-// A save from a newer build is read the same way; a corrupt one is ignored.
-import { SAVE_KEY } from './config.js';
+// Solmar Bay — save and load: cash, story progress, collected coins and
+// settings, in localStorage. One key, one JSON object, no network.
+const KEY = 'solmar-bay-save-v3';
 
-/** Read the save, or an empty one when there is none. */
 export function loadSave() {
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { cash: 0, missionIndex: 0 };
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
     const data = JSON.parse(raw);
-    return {
-      cash: typeof data.cash === 'number' ? Math.max(0, Math.floor(data.cash)) : 0,
-      missionIndex: typeof data.missionIndex === 'number' ? Math.max(0, Math.floor(data.missionIndex)) : 0,
-    };
-  } catch {
-    return { cash: 0, missionIndex: 0 };
-  }
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  } catch { return null; }
 }
 
-/** Write the save from the world's cash and mission progress. */
-export function saveGame(state) {
+export function saveGame(G) {
   try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-      cash: state.cash,
-      missionIndex: state.missionIndex,
-    }));
-  } catch {
-    // Storage can be off: the game then lasts this visit only.
-  }
+    const data = {
+      cash: Math.floor(G.player.cash),
+      missionsDone: G.missions.index,
+      coinsTaken: G.collectibles.coins.filter((c) => c.taken).map((c) => c.id),
+      radio: G.audio.stationName(),
+      muted: G.audio.isMuted(),
+      pos: { x: G.player.pos.x, z: G.player.pos.z },
+      savedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(KEY, JSON.stringify(data));
+    return true;
+  } catch { return false; }
+}
+
+export function clearSave() {
+  try { localStorage.removeItem(KEY); } catch { /* private mode */ }
 }

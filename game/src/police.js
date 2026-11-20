@@ -1,156 +1,183 @@
-// The wanted system and the police who answer it: cruisers that chase from behind
-// and foot cops who close in on foot. Getting caught costs cash and a fresh start.
-import { BUSTED_FINE, GRID, WANTED } from './config.js';
-import { clamp, dist2d, wrapAngle } from './random.js';
+// Solmar Bay — the law: the wanted level, police cruisers that chase and ram,
+// striped roadblocks from 3 stars, and the searchlight helicopter from 4.
+// Getting busted costs cash and the chase; losing the cops clears the stars.
+const THREE = window.THREE;
+import { CFG } from './config.js';
+import { mulberry32, range, pick } from './random.js';
+import { makeCarMesh, makeHelicopterMesh, updateCarVisual } from './vehicles.js';
 
-const PURSUIT_SPEED = 40;
-const SPAWN_INTERVAL = 2.5;
-
-/** How many pursuit cars the wanted level asks for. */
-function wantedCars(wanted) {
-  return Math.min(wanted, 3);
+function makeRoadblockMesh() {
+  const g = new THREE.Group();
+  const stripeTex = (() => {
+    const c = document.createElement('canvas'); c.width = 128; c.height = 32;
+    const x = c.getContext('2d');
+    for (let i = 0; i < 8; i++) { x.fillStyle = i % 2 ? '#f2f2f2' : '#e03a2f'; x.fillRect(i * 16, 0, 16, 32); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(9, 1.1, 0.5), new THREE.MeshStandardMaterial({ map: stripeTex, roughness: 0.6 }));
+  bar.position.y = 1.1; bar.castShadow = true;
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.1, 1.6), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+  legL.position.set(-4, 0.55, 0);
+  const legR = legL.clone(); legR.position.x = 4;
+  g.add(bar, legL, legR);
+  return g;
 }
 
-/** A road-edge spawn point away from the player. */
-function spawnPoint(state) {
-  const edges = [
-    { x: -196, z: state.rng.range(-190, 190) },
-    { x: 196, z: state.rng.range(-190, 190) },
-    { x: state.rng.range(-190, 190), z: -196 },
-    { x: state.rng.range(-190, 190), z: 196 },
-  ];
-  let best = edges[0];
-  let bestD = -1;
-  for (const e of edges) {
-    const d = dist2d(e.x, e.z, state.player.x, state.player.z);
-    if (d > bestD) { bestD = d; best = e; }
-  }
-  return best;
-}
+export function createPolice(G) {
+  const rng = mulberry32(CFG.seed + 55);
+  const group = new THREE.Group();
+  G.scene.add(group);
+  const state = {
+    wanted: 0, lastCrime: -999, bustTimer: 0,
+    cars: [], heli: null, heliActive: false, roadblocks: [],
+  };
 
-/** Steer a pursuit car toward the player, from behind, never head-on. */
-function stepPursuit(state, car, dt) {
-  const p = state.player;
-  const dx = p.x - car.x;
-  const dz = p.z - car.z;
-  const dist = Math.hypot(dx, dz);
-  const wantHeading = Math.atan2(dx, dz);
-  const turn = clamp(wrapAngle(wantHeading - car.heading), -1, 1);
-  car.heading += turn * 2.4 * dt;
-  const targetSpeed = dist > 60 ? PURSUIT_SPEED : PURSUIT_SPEED - 4;
-  car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 0.9);
-  car.x += Math.sin(car.heading) * car.speed * dt;
-  car.z += Math.cos(car.heading) * car.speed * dt;
-  car.flash = (state.time * 6) % 2 < 1 ? 1 : 2;
-  if (dist < 3.5 && Math.abs(car.speed) > 4) {
-    car.speed *= 0.85;
+  function spawnCruiser() {
+    const mesh = makeCarMesh('police', CFG.palette.police);
+    const a = rng() * Math.PI * 2;
+    const d = CFG.police.spawnDist + rng() * 40;
+    const car = {
+      mesh, x: G.player.pos.x + Math.cos(a) * d, z: G.player.pos.z + Math.sin(a) * d,
+      heading: 0, speed: 0, siren: true,
+    };
+    car.x = THREE.MathUtils.clamp(car.x, CFG.beachEdge, CFG.gridMax);
+    car.z = THREE.MathUtils.clamp(car.z, CFG.gridMin, CFG.marinaEdge - 40);
+    mesh.position.set(car.x, 0, car.z);
+    group.add(mesh); state.cars.push(car);
+    return car;
   }
-}
 
-/** Foot cops: spawn when the player is on foot and wanted, walk the player down. */
-function stepFootCops(state, dt) {
-  const p = state.player;
-  if (!p.onFoot || state.wanted === 0) return;
-  if (!state.footCops) state.footCops = [];
-  const want = Math.min(state.wanted, 2);
-  while (state.footCops.length < want) {
-    const angle = state.rng.range(0, Math.PI * 2);
-    state.footCops.push({
-      x: p.x + Math.sin(angle) * 25,
-      z: p.z + Math.cos(angle) * 25,
-      heading: 0, speed: 5.5, timer: 0,
-    });
+  function spawnHeli() {
+    if (state.heli) return;
+    const mesh = makeHelicopterMesh();
+    const t = G.player.car || G.player;
+    const tx = t.x ?? t.pos.x, tz = t.z ?? t.pos.z;
+    state.heli = { mesh, x: tx + 40, z: tz - 50, y: 40, heading: 0 };
+    mesh.position.set(state.heli.x, 40, state.heli.z);
+    group.add(mesh);
+    state.heliActive = true;
   }
-  for (const cop of state.footCops) {
-    const d = dist2d(cop.x, cop.z, p.x, p.z);
-    cop.heading = Math.atan2(p.x - cop.x, p.z - cop.z);
-    cop.x += Math.sin(cop.heading) * cop.speed * dt;
-    cop.z += Math.cos(cop.heading) * cop.speed * dt;
-    if (d < 1.6) {
-      cop.timer += dt;
-      if (cop.timer > 0.8) {
-        bustPlayer(state, 'The cops caught Mara on foot.');
-        return;
-      }
-    } else {
-      cop.timer = 0;
+
+  function dropHeli() {
+    if (!state.heli) return;
+    group.remove(state.heli.mesh); state.heli = null; state.heliActive = false;
+  }
+
+  function spawnRoadblock() {
+    const p = G.world.randomRoadPoint();
+    const mesh = makeRoadblockMesh();
+    mesh.position.set(p.x, 0, p.z);
+    mesh.rotation.y = rng() * Math.PI;
+    group.add(mesh);
+    state.roadblocks.push({ mesh, x: p.x, z: p.z });
+    if (state.roadblocks.length > 3) {
+      const old = state.roadblocks.shift();
+      group.remove(old.mesh);
     }
   }
-}
 
-/** Busted: lose the fine, lose the heat, wake up at Marina Plaza. */
-export function bustPlayer(state, reason) {
-  if (state.busted.active) return;
-  state.busted = { active: true, timer: 2.2, reason };
-  state.screen = 'busted';
-  state.wanted = 0;
-  state.cash = Math.max(0, state.cash - BUSTED_FINE);
-  state.footCops = [];
-  for (const car of state.cars) {
-    if (car.isPolice) car.kind = 'gone';
+  function wantedCount() {
+    return state.wanted === 0 ? 0 : Math.min(CFG.police.maxActive, 1 + state.wanted);
   }
-  state.cars = state.cars.filter((c) => c.kind !== 'gone');
-  if (state.player.car) {
-    state.player.car.kind = 'parked';
-    state.player.car.speed = 0;
-    state.player.car = null;
-  }
-  state.player.onFoot = true;
-  state.player.x = 10;
-  state.player.z = 28;
-  state.player.heading = Math.PI;
-  state.player.speed = 0;
-  state.events.push({ type: 'busted' });
-}
 
-/** Keep the pursuit at the wanted level's strength and check for a bust. */
-export function updatePolice(state, dt) {
-  if (!state.policeTimer) state.policeTimer = 0;
-  state.policeTimer -= dt;
-  const pursuit = state.cars.filter((c) => c.kind === 'police');
-  if (state.wanted > 0 && state.policeTimer <= 0) {
-    state.policeTimer = SPAWN_INTERVAL;
-    if (pursuit.length < wantedCars(state.wanted)) {
-      const spot = spawnPoint(state);
-      state.cars.push({
-        id: 9000 + pursuit.length, kind: 'police',
-        x: spot.x, z: spot.z, heading: Math.atan2(state.player.x - spot.x, state.player.z - spot.z),
-        speed: 20, color: 0xf0f0f0, isPolice: true, cruise: PURSUIT_SPEED,
-        lane: 0, route: null, leg: 0, blocked: 0, flash: 1,
-      });
-    }
-  }
-  for (const car of state.cars) {
-    if (car.kind === 'police') stepPursuit(state, car, dt);
-  }
-  // Far, idle cruisers give up and leave.
-  state.cars = state.cars.filter((c) => {
-    if (c.kind !== 'police') return true;
-    if (state.wanted === 0 && dist2d(c.x, c.z, state.player.x, state.player.z) > 120) return false;
-    return true;
-  });
-  stepFootCops(state, dt);
-  // Busted in a car: boxed in and stopped with a cruiser on the bumper.
-  if (!state.player.onFoot && state.wanted > 0 && state.player.car) {
-    const car = state.player.car;
-    if (Math.abs(car.speed) < 2) {
-      let close = false;
-      for (const c of state.cars) {
-        if (c.kind === 'police' && dist2d(c.x, c.z, car.x, car.z) < 4) close = true;
-      }
-      if (close) {
-        state.busted.carTimer = (state.busted.carTimer ?? 0) + dt;
-        if (state.busted.carTimer > 3) {
-          state.busted.carTimer = 0;
-          bustPlayer(state, 'Boxed in. The cruisers took Mara downtown.');
+  return {
+    state,
+    addWanted(n, why) {
+      if (state.wanted >= 5) return;
+      state.wanted = Math.min(5, state.wanted + n);
+      state.lastCrime = G.time;
+      G.hud.setWanted(state.wanted);
+      if (why) G.hud.toast(`Wanted level ${state.wanted} — ${why}`);
+      if (state.wanted >= CFG.police.roadblockAt && state.roadblocks.length < state.wanted - 2) spawnRoadblock();
+      if (state.wanted >= CFG.police.heliAt) spawnHeli();
+    },
+    setWanted(n) {
+      state.wanted = n; state.lastCrime = G.time;
+      G.hud.setWanted(n);
+      if (n >= CFG.police.heliAt) spawnHeli(); else dropHeli();
+    },
+    clear() {
+      state.wanted = 0; state.lastCrime = G.time; state.bustTimer = 0;
+      G.hud.setWanted(0);
+      dropHeli();
+      for (const c of state.cars) group.remove(c.mesh);
+      state.cars = [];
+      for (const r of state.roadblocks) group.remove(r.mesh);
+      state.roadblocks = [];
+    },
+    update(dt, time) {
+      const P = G.player;
+      // Decay when quiet and unseen.
+      if (state.wanted > 0 && time - state.lastCrime > CFG.wanted.decayDelay) {
+        let near = false;
+        for (const c of state.cars) if (Math.hypot(c.x - P.pos.x, c.z - P.pos.z) < 70) near = true;
+        if (!near && Math.floor((time - state.lastCrime) / CFG.wanted.decayEvery) > Math.floor((time - dt - state.lastCrime) / CFG.wanted.decayEvery)) {
+          state.wanted = Math.max(0, state.wanted - 1);
+          G.hud.setWanted(state.wanted);
+          if (state.wanted < CFG.police.heliAt) dropHeli();
+          if (state.wanted === 0) this.clear();
         }
-      } else {
-        state.busted.carTimer = 0;
       }
-    } else {
-      state.busted.carTimer = 0;
-    }
-  }
+      // Keep the right number of cruisers.
+      const want = wantedCount();
+      while (state.cars.length < want) spawnCruiser();
+      while (state.cars.length > want) { const c = state.cars.pop(); group.remove(c.mesh); }
+      const target = P.car || P;
+      const tx = target.x ?? target.pos.x, tz = target.z ?? target.pos.z;
+      for (const c of state.cars) {
+        const dx = tx - c.x, dz = tz - c.z;
+        const d = Math.hypot(dx, dz);
+        const wantHeading = Math.atan2(-dx, -dz);
+        let dh = wantHeading - c.heading;
+        while (dh > Math.PI) dh -= Math.PI * 2;
+        while (dh < -Math.PI) dh += Math.PI * 2;
+        c.heading += THREE.MathUtils.clamp(dh, -2.4 * dt, 2.4 * dt);
+        const cruise = d > 26 ? CFG.police.ramSpeed : CFG.police.baseSpeed;
+        c.speed += THREE.MathUtils.clamp(cruise - c.speed, -30 * dt, 22 * dt);
+        c.x += -Math.sin(c.heading) * c.speed * dt;
+        c.z += -Math.cos(c.heading) * c.speed * dt;
+        G.world.resolveBuilding(c, 2.4);
+        // Ram the player.
+        if (d < 5.2) {
+          if (P.car) {
+            P.car.speed *= 0.82;
+            const push = 5.2 - d;
+            P.car.x += (dx / (d || 1)) * push * 0.4; P.car.z += (dz / (d || 1)) * push * 0.4;
+            if (Math.random() < dt * 8) G.particles.sparks(P.car.x, 1, P.car.z);
+            G.audio.thud();
+          } else {
+            state.bustTimer += dt;
+            if (state.bustTimer > 1.2) { G.busted(); return; }
+          }
+        } else if (!P.car) {
+          state.bustTimer = Math.max(0, state.bustTimer - dt);
+        }
+        c.mesh.position.set(c.x, 0, c.z);
+        c.mesh.rotation.y = c.heading;
+        updateCarVisual(c.mesh, THREE.MathUtils.clamp(dh, -0.5, 0.5), c.speed, dt, time);
+        if (Math.abs(c.speed) > 20 && Math.random() < dt * 0.5) G.particles.dust(c.x, 0.3, c.z);
+      }
+      // Helicopter: hover ahead of the player and above the rooftops, spotlight on them.
+      if (state.heli) {
+        const h = state.heli;
+        const hx = tx + 18, hz = tz - 65;
+        h.x += (hx - h.x) * Math.min(1, dt * 2.0);
+        h.z += (hz - h.z) * Math.min(1, dt * 2.0);
+        h.y = 26 + Math.sin(time * 0.8) * 2;
+        h.mesh.position.set(h.x, h.y, h.z);
+        h.mesh.rotation.y = Math.atan2(-(tx - h.x), -(tz - h.z));
+        h.mesh.userData.rotor.rotation.y += dt * 28;
+        h.mesh.userData.tailRotor.rotation.x += dt * 30;
+        h.mesh.getObjectByName('beam').lookAt(tx, 0, tz);
+      }
+      // Busted while sitting still in a car.
+      if (P.car && Math.abs(P.car.speed) < 1.5 && state.cars.length > 0) {
+        const near = state.cars.some((c) => Math.hypot(c.x - P.car.x, c.z - P.car.z) < 8);
+        if (near) {
+          state.bustTimer += dt;
+          if (state.bustTimer > CFG.police.bustTime) { G.busted(); return; }
+        } else state.bustTimer = Math.max(0, state.bustTimer - dt);
+      }
+    },
+  };
 }
-
-export { WANTED };

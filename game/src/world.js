@@ -1,353 +1,160 @@
-// The living world: the player, the cars, the pedestrians, the police and the
-// missions, all advanced in fixed steps. The renderer only paints this state;
-// the HUD only reads it; nothing else moves the game.
-import {
-  BUSTED_FINE, CAR, GRID, MISSIONS, PLAYER, STEP, STORY_BONUS, TRAFFIC, WANTED,
-} from './config.js';
-import { buildCity, collideBuildings, nearestRoad, onRoad } from './city.js';
-import { clamp, createRandom, dist2d, wrapAngle } from './random.js';
-import { updateMissions, missionWaypoint } from './missions.js';
-import { updatePolice } from './police.js';
-import { updatePeds, updateTraffic } from './traffic.js';
-import { tryPunch } from './combat.js';
+// Solmar Bay — the city itself, as data. buildWorld turns the seed into roads,
+// blocks, buildings, palms, lamps, parks and collectible spots. Pure data: no
+// three.js here, so render.js, traffic, police and missions all read one truth.
+import { CFG } from './config.js';
+import { mulberry32, range, int, pick, chance } from './random.js';
+import { districtAt, LANDMARKS, NEON_SIGNS } from './city.js';
 
-const CAR_COLORS = [0xc22e2e, 0x2e8f8a, 0xe8b93d, 0xe8e8e8, 0x22242a, 0x4a6fa5, 0x7a4a8a];
+export const ROAD_LINES = [];
+for (let v = CFG.gridMin; v <= CFG.gridMax; v += CFG.block) ROAD_LINES.push(v);
+// Roads a car or pedestrian may actually use: the west edge (-1120, -960) is
+// under the sea plane and the south edge (1120) under the marina water.
+export const TRAFFIC_LINES = ROAD_LINES.filter((l) => l >= CFG.beachEdge && l <= CFG.marinaEdge - 40);
 
-let nextCarId = 1;
+export function isWater(x, z) { return x < CFG.oceanEdge || z > CFG.marinaEdge; }
+export function isBeach(x, z) { return x >= CFG.oceanEdge && x < CFG.beachEdge && z >= -CFG.worldHalf && z <= CFG.worldHalf; }
+export function onRoad(x, z) {
+  if (x < CFG.gridMin - 20 || x > CFG.gridMax + 20 || z < CFG.gridMin - 20 || z > CFG.gridMax + 20) return false;
+  for (const l of ROAD_LINES) {
+    if (Math.abs(x - l) <= CFG.roadWidth / 2 && z >= CFG.gridMin - 20 && z <= CFG.gridMax + 20) return true;
+    if (Math.abs(z - l) <= CFG.roadWidth / 2 && x >= CFG.gridMin - 20 && x <= CFG.gridMax + 20) return true;
+  }
+  return false;
+}
+export function nearestRoadPoint(x, z) {
+  let bx = x, bz = z, best = Infinity;
+  for (const l of ROAD_LINES) {
+    const dx = Math.abs(x - l); if (dx < best) { best = dx; bx = l; bz = z; }
+    const dz = Math.abs(z - l); if (dz < best) { best = dz; bx = x; bz = l; }
+  }
+  return { x: bx, z: bz };
+}
 
-/** A fresh world from a seed and a save (cash + mission progress carry over). */
-export function createWorld(seed, save) {
-  const rng = createRandom(seed);
-  const city = buildCity(rng);
-  const state = {
-    seed, rng, city,
-    time: 0,
-    screen: 'title',
-    player: {
-      x: 10, z: 28, heading: Math.PI, onFoot: true, car: null,
-      speed: 0, walkPhase: 0, punchTimer: 0, running: false,
-    },
-    cars: [],
-    peds: [],
-    wanted: 0,
-    quietSince: 0,
-    lastCrimeAt: -999,
-    lastCopHitAt: -999,
-    lastPedHitAt: -999,
-    cash: save?.cash ?? 0,
-    missionIndex: save?.missionIndex ?? 0,
-    mission: { checkpoint: 0, started: false },
-    toast: { text: '', until: 0 },
-    camYaw: Math.PI,
-    camPitch: 0.32,
-    camDist: 11,
-    busted: { active: false, timer: 0, reason: '' },
-    events: [],
-    stats: { carsStolen: 0, missionsDone: 0 },
-    storyDone: false,
+export function buildWorld(seed) {
+  const rng = mulberry32(seed);
+  const buildings = [];
+  const palms = [];
+  const lamps = [];
+  const parks = [];
+  const signs = [];
+  const houses = [];
+
+  // Three park blocks: green lungs with trees and paths. Centres are real
+  // block centres (road line + half a block), so the isPark check below
+  // matches the blocks the loop actually visits.
+  const parkCenters = [[-80, 400], [400, -400], [-400, -80]];
+  for (const [px, pz] of parkCenters) {
+    parks.push({ x: px, z: pz, w: CFG.block - CFG.roadWidth, d: CFG.block - CFG.roadWidth });
+  }
+  const isPark = (cx, cz) => parkCenters.some(([a, b]) => a === cx && b === cz);
+
+  for (let i = 0; i < ROAD_LINES.length - 1; i++) {
+    for (let j = 0; j < ROAD_LINES.length - 1; j++) {
+      const cx = ROAD_LINES[i] + CFG.block / 2;
+      const cz = ROAD_LINES[j] + CFG.block / 2;
+      if (cx < CFG.beachEdge) continue; // sand and sea: no blocks
+      if (cz > CFG.marinaEdge - 40) continue; // harbour: docks, not blocks
+      if (isPark(cx, cz)) continue;
+      const d = districtAt(cx, cz);
+      const inset = 16;
+      const bw = CFG.block - CFG.roadWidth - inset * 2;
+      const put = (x, z, w, dd, h, color) => {
+        buildings.push({ x, z, w, d: dd, h, color, roof: pick(rng, CFG.palette.roof), rot: 0 });
+      };
+      if (d.style === 'downtown') {
+        if (chance(rng, 0.55)) {
+          const h = range(rng, 70, 145);
+          const bw = range(rng, 44, 62), bd = range(rng, 44, 62);
+          put(cx, cz, bw, bd, h, pick(rng, CFG.palette.building));
+          if (chance(rng, 0.75)) {
+            // Neon on the south face, just proud of the facade so it is never
+            // buried inside the tower. Signs repeat — chain hotels do too.
+            const s = pick(rng, NEON_SIGNS);
+            signs.push({ text: s.text, color: s.color, w: s.w, h: s.h, x: cx, z: cz + bd / 2 + 0.6, y: range(rng, 34, 60), rotY: 0 });
+          }
+        } else {
+          put(cx - 22, cz - 22, 40, 40, range(rng, 45, 80), pick(rng, CFG.palette.building));
+          put(cx + 24, cz + 24, 36, 36, range(rng, 50, 95), pick(rng, CFG.palette.building));
+        }
+      } else if (d.style === 'oldtown') {
+        const n = int(rng, 3, 5);
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + range(rng, -0.3, 0.3);
+          put(cx + Math.cos(a) * 30, cz + Math.sin(a) * 30, range(rng, 20, 30), range(rng, 20, 30), range(rng, 12, 30), pick(rng, CFG.palette.building));
+        }
+      } else if (d.style === 'hills') {
+        const n = int(rng, 2, 4);
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + range(rng, -0.3, 0.3);
+          const hx = cx + Math.cos(a) * 34, hz = cz + Math.sin(a) * 34;
+          put(hx, hz, range(rng, 16, 24), range(rng, 16, 24), range(rng, 8, 15), pick(rng, CFG.palette.building));
+          houses.push({ x: hx, z: hz });
+        }
+      } else if (d.style === 'marina') {
+        put(cx, cz, range(rng, 30, 44), range(rng, 24, 34), range(rng, 10, 20), pick(rng, CFG.palette.building));
+      } else {
+        const n = int(rng, 2, 3);
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + range(rng, -0.4, 0.4);
+          put(cx + Math.cos(a) * 28, cz + Math.sin(a) * 28, range(rng, 26, 38), range(rng, 26, 38), range(rng, 24, 58), pick(rng, CFG.palette.building));
+        }
+      }
+      // Palms and lamps around the block edges.
+      if (chance(rng, 0.6)) palms.push({ x: cx - bw / 2 - 4, z: cz + range(rng, -40, 40), s: range(rng, 0.8, 1.3) });
+      if (chance(rng, 0.4)) palms.push({ x: cx + bw / 2 + 4, z: cz + range(rng, -40, 40), s: range(rng, 0.8, 1.3) });
+    }
+  }
+
+  // Beach palms and umbrellas along the coast.
+  for (let z = -1080; z <= 1080; z += 90) {
+    palms.push({ x: -830 + range(rng, -8, 8), z: z + range(rng, -20, 20), s: range(rng, 1.0, 1.5) });
+    if (chance(rng, 0.5)) palms.push({ x: -860 + range(rng, -6, 6), z: z + 45, s: range(rng, 0.9, 1.2) });
+  }
+  // Street lamps at every second intersection, on land only.
+  for (let i = 0; i < ROAD_LINES.length; i += 2) {
+    for (let j = 0; j < ROAD_LINES.length; j += 2) {
+      const lx = ROAD_LINES[i] + 16, lz = ROAD_LINES[j] + 16;
+      if (lx > CFG.oceanEdge + 20 && lz < CFG.marinaEdge - 20) lamps.push({ x: lx, z: lz });
+    }
+  }
+  // Sun coins: 12, spread over districts, always on walkable ground.
+  const coinSpots = [
+    [-840, -960], [-720, -720], [-80, 80], [240, -80], [560, 400], [880, -880],
+    [80, 1040], [-560, 240], [400, 720], [-240, -560], [720, -240], [80, -880],
+  ];
+  const coins = coinSpots.map(([x, z], k) => ({ id: k, x, z, taken: false }));
+
+  const world = { buildings, palms, lamps, parks, signs, houses, coins, landmarks: LANDMARKS, rng };
+  world.pointInBuilding = (x, z, r) => {
+    for (const b of buildings) {
+      if (Math.abs(x - b.x) < b.w / 2 + r && Math.abs(z - b.z) < b.d / 2 + r) return b;
+    }
+    return null;
   };
-  spawnParked(state);
-  spawnTraffic(state);
-  spawnPeds(state);
-  return state;
-}
-
-/** Put the world back to its first step, keeping cash and mission progress. */
-export function resetWorld(state) {
-  const save = { cash: state.cash, missionIndex: state.missionIndex };
-  const fresh = createWorld(state.seed, save);
-  for (const key of Object.keys(fresh)) state[key] = fresh[key];
-}
-
-function spawnParked(state) {
-  for (const spot of state.city.parkedSpots) {
-    state.cars.push({
-      id: nextCarId, kind: 'parked', x: spot.x, z: spot.z, heading: spot.heading,
-      speed: 0, color: CAR_COLORS[state.rng.int(0, CAR_COLORS.length - 1)],
-      isPolice: false, cruise: 0, lane: 0, route: null, leg: 0, blocked: 0, flash: 0,
-    });
-    nextCarId += 1;
-  }
-}
-
-function spawnTraffic(state) {
-  for (let i = 0; i < TRAFFIC.count; i += 1) {
-    const road = state.rng.pick(GRID.roads);
-    const along = state.rng.range(-190, 190);
-    const axis = state.rng.chance(0.5) ? 'x' : 'z';
-    const heading = axis === 'x'
-      ? (state.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2)
-      : (state.rng.chance(0.5) ? 0 : Math.PI);
-    state.cars.push({
-      id: nextCarId, kind: 'traffic',
-      x: axis === 'x' ? along : road, z: axis === 'x' ? road : along,
-      heading, speed: state.rng.range(TRAFFIC.cruiseMin, TRAFFIC.cruiseMax),
-      color: CAR_COLORS[state.rng.int(0, CAR_COLORS.length - 1)],
-      isPolice: false, cruise: state.rng.range(TRAFFIC.cruiseMin, TRAFFIC.cruiseMax),
-      lane: 0, route: null, leg: 0, blocked: 0, flash: 0,
-    });
-    nextCarId += 1;
-  }
-}
-
-function spawnPeds(state) {
-  for (let i = 0; i < 18; i += 1) {
-    const road = state.rng.pick(GRID.roads);
-    const along = state.rng.range(-190, 190);
-    const axis = state.rng.chance(0.5) ? 'x' : 'z';
-    state.peds.push({
-      x: axis === 'x' ? along : road + 8.5,
-      z: axis === 'x' ? road + 8.5 : along,
-      heading: state.rng.range(0, Math.PI * 2),
-      speed: state.rng.range(1.2, 2.2),
-      mode: 'walk', timer: 0, edge: axis, shirt: state.rng.pick([0xd96a4a, 0x4a7ad9, 0x7ad94a, 0xd9c74a, 0x9a4ad9]),
-    });
-  }
-}
-
-/** A short gold message across the top of the screen. */
-export function setToast(state, text, seconds = 4) {
-  state.toast = { text, until: state.time + seconds };
-}
-
-/** Raise the wanted level, remembering when the last crime happened. */
-export function addWanted(state, stars, reason) {
-  state.wanted = Math.min(WANTED.max, state.wanted + stars);
-  state.lastCrimeAt = state.time;
-  state.quietSince = state.time;
-  if (reason) setToast(state, reason, 2.5);
-}
-
-/** The player's car, or null when on foot. */
-export function playerCar(state) {
-  return state.player.car;
-}
-
-/** Nearest drivable car to the player within reach, if any. */
-function nearestCar(state, maxDist) {
-  let best = null;
-  let bestD = maxDist;
-  for (const car of state.cars) {
-    if (car.kind === 'player') continue;
-    const d = dist2d(state.player.x, state.player.z, car.x, car.z);
-    if (d < bestD) { bestD = d; best = car; }
-  }
-  return best;
-}
-
-function enterCar(state, car) {
-  car.kind = 'player';
-  state.player.car = car;
-  state.player.onFoot = false;
-  state.player.speed = 0;
-  state.stats.carsStolen += 1;
-  addWanted(state, WANTED.steal, 'Car stolen — the law is watching');
-  state.events.push({ type: 'enter' });
-}
-
-function exitCar(state) {
-  const car = state.player.car;
-  car.kind = 'parked';
-  car.speed = 0;
-  const side = { x: Math.cos(car.heading), z: -Math.sin(car.heading) };
-  state.player.x = car.x + side.x * 3;
-  state.player.z = car.z + side.z * 3;
-  state.player.heading = car.heading;
-  state.player.car = null;
-  state.player.onFoot = true;
-  state.player.speed = 0;
-}
-
-/** Move the player on foot, camera-relative, and push them out of buildings. */
-function stepOnFoot(state, input, dt) {
-  const p = state.player;
-  const speed = input.run ? PLAYER.runSpeed : PLAYER.walkSpeed;
-  const fx = Math.sin(state.camYaw);
-  const fz = Math.cos(state.camYaw);
-  // Right-hand vector for the camera yaw: facing north (-z), right is east (+x).
-  const rx = -Math.cos(state.camYaw);
-  const rz = Math.sin(state.camYaw);
-  const mx = fx * input.fwd + rx * input.strafe;
-  const mz = fz * input.fwd + rz * input.strafe;
-  const len = Math.hypot(mx, mz);
-  if (len > 0.01) {
-    p.heading = Math.atan2(mx / len, mz / len);
-    p.x += (mx / len) * speed * dt;
-    p.z += (mz / len) * speed * dt;
-    p.walkPhase += dt * speed * 1.6;
-    p.speed = speed;
-  } else {
-    p.speed = 0;
-  }
-  const fixed = collideBuildings(state.city, p.x, p.z, PLAYER.radius);
-  p.x = fixed.x;
-  p.z = fixed.z;
-  p.punchTimer = Math.max(0, p.punchTimer - dt);
-  if (input.punch && p.punchTimer <= 0) {
-    p.punchTimer = PLAYER.punchCooldown;
-    tryPunch(state);
-  }
-}
-
-/** Drive the player's car: accelerate, steer, brake, handbrake, and collide. */
-function stepDriving(state, input, dt) {
-  const car = state.player.car;
-  const p = state.player;
-  if (input.fwd > 0) car.speed += CAR.accel * dt;
-  if (input.fwd < 0) {
-    if (car.speed > 0.5) car.speed -= CAR.brake * dt;
-    else car.speed -= CAR.reverseAccel * dt;
-  }
-  if (input.handbrake) {
-    car.speed -= Math.sign(car.speed) * CAR.handbrakeDecel * dt;
-    if (Math.abs(car.speed) < 0.5) car.speed = 0;
-  }
-  car.speed = clamp(car.speed, -CAR.maxReverse, CAR.maxSpeed);
-  if (Math.abs(car.speed) > 0.2) {
-    const turn = input.steer * CAR.steer * clamp(Math.abs(car.speed) / 12, 0.25, 1);
-    car.heading += turn * dt * Math.sign(car.speed) * (input.handbrake ? 1.5 : 1);
-  }
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  car.x += fx * car.speed * dt;
-  car.z += fz * car.speed * dt;
-  const before = { x: car.x, z: car.z, speed: car.speed };
-  const fixed = collideBuildings(state.city, car.x, car.z, CAR.radius);
-  if ((fixed.x !== before.x || fixed.z !== before.z) && Math.abs(before.speed) > 6) {
-    state.events.push({ type: 'crash' });
-    car.speed *= 0.55;
-  }
-  car.x = fixed.x;
-  car.z = fixed.z;
-  p.x = car.x;
-  p.z = car.z;
-  p.heading = car.heading;
-  p.speed = Math.abs(car.speed);
-  if (input.punch) setToast(state, 'You need to be on foot to fight', 1.5);
-}
-
-/** Resolve a collision between two cars: push apart, trade speed, judge the ram. */
-function collideCars(state, a, b) {
-  const dx = b.x - a.x;
-  const dz = b.z - a.z;
-  const d = Math.hypot(dx, dz);
-  const min = CAR.radius * 2 - 0.4;
-  if (d >= min || d < 0.001) return;
-  const nx = dx / d;
-  const nz = dz / d;
-  const push = (min - d) / 2;
-  // A parked car does not move: only the other car is pushed out of it.
-  const pushA = a.kind === 'parked' ? 0 : push;
-  const pushB = b.kind === 'parked' ? 0 : push;
-  a.x -= nx * pushA;
-  a.z -= nz * pushA;
-  b.x += nx * pushB;
-  b.z += nz * pushB;
-  const rel = (b.speed * Math.sin(b.heading) - a.speed * Math.sin(a.heading)) * nx
-    + (b.speed * Math.cos(b.heading) - a.speed * Math.cos(a.heading)) * nz;
-  if (Math.abs(rel) > 3) {
-    state.events.push({ type: 'crash' });
-    const playerInvolved = a.kind === 'player' || b.kind === 'player';
-    const cop = a.isPolice ? a : b.isPolice ? b : null;
-    const player = a.kind === 'player' ? a : b.kind === 'player' ? b : null;
-    if (playerInvolved && cop && player) {
-      // Who rear-ended whom? A police car closing from behind the player is a
-      // police ram — the player's fault only when the player drives into the cop.
-      const toCop = { x: cop.x - player.x, z: cop.z - player.z };
-      const playerFwd = { x: Math.sin(player.heading), z: Math.cos(player.heading) };
-      const copBehindPlayer = toCop.x * playerFwd.x + toCop.z * playerFwd.z < 0;
-      const closing = rel * (cop === a ? -1 : 1);
-      if (copBehindPlayer && closing > 0) {
-        player.speed *= 0.7;
-      } else if (state.time - state.lastCopHitAt > 5 && Math.abs(player.speed) > 8) {
-        state.lastCopHitAt = state.time;
-        addWanted(state, WANTED.hitCop, 'You hit a police cruiser!');
+  world.resolveBuilding = (p, r) => {
+    for (const b of buildings) {
+      const dx = p.x - b.x, dz = p.z - b.z;
+      const ox = b.w / 2 + r - Math.abs(dx), oz = b.d / 2 + r - Math.abs(dz);
+      if (ox > 0 && oz > 0) {
+        if (ox < oz) p.x = b.x + Math.sign(dx || 1) * (b.w / 2 + r);
+        else p.z = b.z + Math.sign(dz || 1) * (b.d / 2 + r);
       }
     }
-    a.speed *= 0.8;
-    b.speed *= 0.8;
-  }
+  };
+  world.randomRoadPoint = () => {
+    const vertical = chance(rng, 0.5);
+    const line = pick(rng, TRAFFIC_LINES);
+    // Along-road coordinate stays on land: no sea at either end.
+    const t = vertical
+      ? range(rng, CFG.gridMin + 40, CFG.marinaEdge - 40)
+      : range(rng, CFG.beachEdge + 40, CFG.gridMax - 40);
+    return vertical ? { x: line, z: t } : { x: t, z: line };
+  };
+  world.spawnPoints = {
+    player: { x: 80, z: 160 },
+    safehouse: { x: 880, z: -880 },
+    cafe: { x: -720, z: -720 },
+    marina: { x: 80, z: 1000 },
+  };
+  return world;
 }
-
-/** A fast car through a pedestrian: the pedestrian goes down, the law notices. */
-function collideCarPed(state, car) {
-  if (car.kind !== 'player' || Math.abs(car.speed) < 3) return;
-  for (const ped of state.peds) {
-    if (ped.mode === 'down') continue;
-    if (dist2d(car.x, car.z, ped.x, ped.z) < 2.4) {
-      ped.mode = 'down';
-      ped.timer = 3;
-      car.speed *= 0.85;
-      state.events.push({ type: 'crash' });
-      if (state.time - state.lastPedHitAt > 5) {
-        state.lastPedHitAt = state.time;
-        addWanted(state, WANTED.hitPed, 'You hit a pedestrian!');
-      }
-    }
-  }
-}
-
-/** Advance the world one fixed step. Input is the same shape in play and in shots. */
-export function stepWorld(state, input, dt = STEP) {
-  state.time += dt;
-  if (input.enterCar) {
-    if (state.player.onFoot) {
-      const car = nearestCar(state, 4);
-      if (car) enterCar(state, car);
-    } else {
-      exitCar(state);
-    }
-  }
-  if (state.player.onFoot) stepOnFoot(state, input, dt);
-  else stepDriving(state, input, dt);
-
-  updateTraffic(state, dt);
-  updatePeds(state, dt);
-  updatePolice(state, dt);
-  updateMissions(state);
-
-  const cars = state.cars;
-  for (let i = 0; i < cars.length; i += 1) {
-    for (let j = i + 1; j < cars.length; j += 1) collideCars(state, cars[i], cars[j]);
-  }
-  for (const car of cars) collideCarPed(state, car);
-
-  // Wanted fades when the player has been quiet and out of sight for a while.
-  if (state.wanted > 0 && state.time - state.lastCrimeAt > WANTED.decayQuietSeconds) {
-    if (state.time - (state.quietSince + WANTED.decayQuietSeconds) > WANTED.decayStepSeconds) {
-      state.wanted -= 1;
-      state.quietSince = state.time;
-      state.lastCrimeAt = state.time;
-      if (state.wanted === 0) setToast(state, 'You lost them. For now.', 3);
-    }
-  }
-  if (state.toast.until && state.time > state.toast.until) state.toast.text = '';
-  if (state.pendingBriefing && state.time >= state.pendingBriefing.at) {
-    setToast(state, state.pendingBriefing.text, 5);
-    state.pendingBriefing = null;
-  }
-  if (state.busted.active) {
-    state.busted.timer -= dt;
-    if (state.busted.timer <= 0) {
-      state.busted.active = false;
-      state.screen = 'play';
-    }
-  }
-}
-
-/** The waypoint the HUD and the beacon should point at right now, or null. */
-export function currentWaypoint(state) {
-  return missionWaypoint(state);
-}
-
-/** Finish the story: bonus cash, a toast, free roam from here on. */
-export function finishStory(state) {
-  if (state.storyDone) return;
-  state.storyDone = true;
-  state.cash += STORY_BONUS;
-  state.stats.missionsDone = MISSIONS.length;
-  setToast(state, `Story complete — the syndicate pays $${STORY_BONUS}. Solmar Bay is yours.`, 6);
-  state.events.push({ type: 'jingle' });
-}
-
-export { nearestRoad, onRoad };
