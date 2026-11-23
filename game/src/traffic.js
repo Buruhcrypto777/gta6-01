@@ -1,106 +1,74 @@
-// Solmar Bay — traffic AI. Cars loop the perimeter of city blocks on the
-// road lanes, slowing for the car ahead, so every street always has moving
-// traffic in it.
-import { CAR_COLORS, SPEEDS } from './config.js';
-import { createCarMesh } from './vehicles.js';
+// Solmar Bay — traffic AI: cars that drive the street grid.
+// Each car follows a street, turns at intersections sometimes, and brakes
+// for the car ahead, so the streets always feel busy without any scripting.
+import { CAR_COLORS, VEHICLE_TYPES, WORLD } from './config.js';
+import { makeCarMesh } from './vehicles.js';
 
-export function createTraffic(THREE, scene, data, rng) {
+export function createTraffic(scene, rng) {
   const cars = [];
-  const loops = data.loops;
+  const streets = [];
+  for (let k = -4; k <= 4; k += 1) streets.push(k * WORLD.roadEvery);
 
-  function loopPoint(loop, seg, t) {
-    const a = loop.corners[seg % 4];
-    const b = loop.corners[(seg + 1) % 4];
+  function spawn(i) {
+    const alongX = rng.chance(0.5);
+    const street = rng.pick(streets);
+    const type = rng.pick(VEHICLE_TYPES);
+    const color = type === 'taxi' ? 0xf7c948 : rng.pick(CAR_COLORS);
+    const group = makeCarMesh(type, color);
+    scene.add(group);
     return {
-      x: a.x + (b.x - a.x) * t,
-      z: a.z + (b.z - a.z) * t,
-      dx: Math.sign(b.x - a.x),
-      dz: Math.sign(b.z - a.z),
+      group,
+      type,
+      alongX,
+      coord: street,
+      pos: rng.range(-200, 200),
+      dir: rng.chance(0.5) ? 1 : -1,
+      speed: rng.range(8, 14),
+      cruise: rng.range(8, 14),
     };
   }
 
-  for (let i = 0; i < 24; i += 1) {
-    const loop = rng.pick(loops);
-    const seg = rng.int(0, 3);
-    const t = rng.next();
-    const p = loopPoint(loop, seg, t);
-    const type = rng.int(0, 5);
-    const mesh = createCarMesh(THREE, type, rng.pick(CAR_COLORS));
-    // Right-hand lane offset: 3 m to the right of the travel direction.
-    const ox = p.dz * 3;
-    const oz = -p.dx * 3;
-    mesh.position.set(p.x + ox, 0, p.z + oz);
-    scene.add(mesh);
-    cars.push({
-      mesh,
-      pos: mesh.position,
-      loop,
-      seg,
-      t,
-      speed: rng.range(SPEEDS.trafficMin, SPEEDS.trafficMax),
-      baseSpeed: rng.range(SPEEDS.trafficMin, SPEEDS.trafficMax),
-      heading: Math.atan2(p.dx, p.dz),
-      type,
-    });
+  for (let i = 0; i < 26; i += 1) cars.push(spawn(i));
+
+  function place(car) {
+    const lane = car.dir * 3;
+    if (car.alongX) {
+      car.group.position.set(car.pos, 0, car.coord + lane);
+      car.group.rotation.y = car.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    } else {
+      car.group.position.set(car.coord + lane, 0, car.pos);
+      car.group.rotation.y = car.dir > 0 ? 0 : Math.PI;
+    }
   }
+  for (const car of cars) place(car);
 
   return {
     cars,
     update(dt) {
-      for (const c of cars) {
-        // Slow for the car ahead on the same stretch.
-        let target = c.baseSpeed;
-        for (const o of cars) {
-          if (o === c) continue;
-          const dx = o.pos.x - c.pos.x;
-          const dz = o.pos.z - c.pos.z;
-          const d = Math.hypot(dx, dz);
-          if (d < 9 && d > 0.01) {
-            const ahead = (dx * Math.sin(c.heading) + dz * Math.cos(c.heading)) / d;
-            if (ahead > 0.7) target = Math.min(target, 3);
-          }
+      for (const car of cars) {
+        // Brake for a car ahead in the same lane.
+        let target = car.cruise;
+        for (const other of cars) {
+          if (other === car || other.alongX !== car.alongX || other.coord !== car.coord || other.dir !== car.dir) continue;
+          const gap = (other.pos - car.pos) * car.dir;
+          if (gap > 0 && gap < 10) target = Math.min(target, Math.max(0, (gap - 6) * 1.5));
         }
-        c.speed += (target - c.speed) * Math.min(1, dt * 2);
-        const a = c.loop.corners[c.seg % 4];
-        const b = loopPoint(c.loop, c.seg, 1);
-        const segLen = Math.hypot(b.x - a.x, b.z - a.z);
-        c.t += (c.speed * dt) / segLen;
-        if (c.t >= 1) {
-          c.t -= 1;
-          c.seg = (c.seg + 1) % 4;
+        car.speed += (target - car.speed) * Math.min(1, dt * 2);
+        car.pos += car.dir * car.speed * dt;
+        // Wrap around the far edge.
+        if (car.pos > 205) car.pos = -205;
+        if (car.pos < -205) car.pos = 205;
+        // Sometimes turn at an intersection.
+        const nearCross = Math.abs(((car.pos % WORLD.roadEvery) + WORLD.roadEvery) % WORLD.roadEvery) < car.speed * dt + 0.4;
+        if (nearCross && rng.chance(0.09)) {
+          const cross = Math.round(car.pos / WORLD.roadEvery) * WORLD.roadEvery;
+          const oldCoord = car.coord;
+          car.coord = Math.max(-176, Math.min(176, cross));
+          car.pos = oldCoord;
+          car.alongX = !car.alongX;
+          car.dir = rng.chance(0.5) ? 1 : -1;
         }
-        const p = loopPoint(c.loop, c.seg, c.t);
-        const ox = p.dz * 3;
-        const oz = -p.dx * 3;
-        c.pos.x = p.x + ox;
-        c.pos.z = p.z + oz;
-        c.heading = Math.atan2(p.dx, p.dz);
-        c.mesh.position.copy(c.pos);
-        c.mesh.rotation.y = c.heading;
-        const spin = (c.speed * dt) / 0.34;
-        for (const w of c.mesh.userData.wheels) w.rotation.y += spin;
-      }
-    },
-    // Move a few cars near a point (used to stage dense screenshots).
-    gather(x, z, n, rng2) {
-      const sorted = [...cars].sort((p, q) => {
-        const dp = Math.hypot(p.pos.x - x, p.pos.z - z);
-        const dq = Math.hypot(q.pos.x - x, q.pos.z - z);
-        return dp - dq;
-      });
-      for (let i = 0; i < Math.min(n, sorted.length); i += 1) {
-        const c = sorted[i];
-        const ang = rng2 ? rng2.range(0, Math.PI * 2) : (i / n) * Math.PI * 2;
-        const rr = 14 + (i % 4) * 9;
-        const nx = x + Math.cos(ang) * rr;
-        const nz = z + Math.sin(ang) * rr;
-        // Snap onto the nearest road line so the car sits on asphalt.
-        const line = data.roadLines.reduce((best, l) => (Math.abs(l - nx) < Math.abs(best - nx) ? l : best), data.roadLines[0]);
-        c.pos.x = line + 3;
-        c.pos.z = nz;
-        c.heading = Math.PI / 2;
-        c.mesh.position.copy(c.pos);
-        c.mesh.rotation.y = c.heading;
+        place(car);
       }
     },
   };

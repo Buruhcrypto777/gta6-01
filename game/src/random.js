@@ -1,6 +1,6 @@
-// Solmar Bay — deterministic seeded random (mulberry32).
-// The same seed always builds the same city, the same traffic and the same
-// screenshot staging, so two runs of the game start from the same world.
+// Solmar Bay — deterministic seeded random numbers.
+// The whole city is drawn from one stream, so the same seed always builds
+// the same world: screenshots are reproducible and reloads are identical.
 export function createRandom(seed) {
   let a = seed >>> 0;
   function next() {
@@ -12,9 +12,17 @@ export function createRandom(seed) {
   }
   return {
     next,
-    range: (lo, hi) => lo + next() * (hi - lo),
-    int: (lo, hi) => lo + Math.floor(next() * (hi - lo + 1)),
-    pick: (arr) => arr[Math.floor(next() * arr.length)],
-    chance: (p) => next() < p,
+    range(min, max) {
+      return min + next() * (max - min);
+    },
+    int(min, max) {
+      return Math.floor(min + next() * (max - min + 1));
+    },
+    pick(list) {
+      return list[Math.floor(next() * list.length)];
+    },
+    chance(p) {
+      return next() < p;
+    },
   };
 }

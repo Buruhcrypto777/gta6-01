@@ -1,50 +1,54 @@
-// Solmar Bay — the 12 Sun Coins. Golden discs spinning over the city: parks,
-// the beach, the marina, plazas and alleys. Each one is worth $50.
-export function createCollectibles(THREE, scene, data) {
+// Solmar Bay — Sun Coins: twelve golden coins hidden around the city.
+// They spin and bob over sidewalks, the marina and the beach; each one is
+// worth $50 and counts toward the Sun Coin Run mission.
+import { COIN_VALUE, WORLD } from './config.js';
+
+export function createCollectibles(scene, rng) {
   const coins = [];
-  let t = 0; // own clock: the bob must not read the wall clock (determinism)
-  const gold = new THREE.MeshLambertMaterial({ color: 0xd4af37, emissive: 0x8a6d1a });
-  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.16 });
-  data.coinSpots.forEach((spot, i) => {
-    const group = new THREE.Group();
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.1, 18), gold);
-    group.add(disc);
-    const glow = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 8), glowMat);
-    group.add(glow);
-    group.position.set(spot.x, 1.1, spot.z);
-    scene.add(group);
-    coins.push({ mesh: group, x: spot.x, z: spot.z, taken: false, phase: i * 0.7 });
-  });
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffc44d, emissive: 0x8a6a10 });
+  const geo = new THREE.TorusGeometry(0.7, 0.22, 8, 20);
+  const streets = [];
+  for (let k = -4; k <= 4; k += 1) streets.push(k * WORLD.roadEvery);
+  const spots = [
+    { x: -140, z: 196 }, // marina
+    { x: 22, z: -34 }, // casino front
+    { x: 0, z: 196 }, // beach hideout
+    { x: -110, z: 66 }, // Bay Club
+    { x: 110, z: -154 }, // north hotel
+    { x: -66, z: -110 },
+    { x: 66, z: 110 },
+    { x: -154, z: -22 },
+    { x: 154, z: 22 },
+    { x: 0, z: -110 },
+    { x: -44, z: 154 },
+    { x: 88, z: -66 },
+  ];
+  for (const spot of spots) {
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(spot.x + rng.range(-2, 2), 1.2, spot.z + rng.range(-2, 2));
+    scene.add(mesh);
+    coins.push({ x: mesh.position.x, z: mesh.position.z, mesh, taken: false, phase: rng.range(0, Math.PI * 2) });
+  }
 
   return {
     coins,
-    count() {
+    get collected() {
       return coins.filter((c) => c.taken).length;
     },
-    update(dt, playerPos, onCollect) {
-      t += dt;
-      for (const c of coins) {
-        if (c.taken) continue;
-        c.mesh.rotation.y += dt * 2;
-        c.mesh.position.y = 1.1 + Math.sin(t * 2 + c.phase) * 0.15;
-        const d = Math.hypot(c.x - playerPos.x, c.z - playerPos.z);
-        if (d < 2.6) {
-          c.taken = true;
-          c.mesh.visible = false;
-          if (onCollect) onCollect(c);
+    get value() {
+      return COIN_VALUE;
+    },
+    update(dt, playerPos, time, onPickup) {
+      for (const coin of coins) {
+        if (coin.taken) continue;
+        coin.mesh.rotation.y = time * 2 + coin.phase;
+        coin.mesh.position.y = 1.2 + Math.sin(time * 2.4 + coin.phase) * 0.25;
+        if (Math.hypot(coin.x - playerPos.x, coin.z - playerPos.z) < 2.2) {
+          coin.taken = true;
+          coin.mesh.visible = false;
+          if (onPickup) onPickup(coin);
         }
       }
-    },
-    markTaken(indices) {
-      for (const i of indices) {
-        if (coins[i]) {
-          coins[i].taken = true;
-          coins[i].mesh.visible = false;
-        }
-      }
-    },
-    takenIndices() {
-      return coins.map((c, i) => (c.taken ? i : -1)).filter((i) => i >= 0);
     },
   };
 }

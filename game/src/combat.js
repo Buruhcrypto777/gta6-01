@@ -1,47 +1,68 @@
-// Solmar Bay — punch combat (F). A short swing in front of Mara knocks
-// pedestrians down and hurts rivals; hitting a pedestrian in front of
-// witnesses raises the heat by one star.
-export function createCombat() {
+// Solmar Bay — punch combat (F).
+// A short-range swing in front of Mara: it floors the nearest pedestrian or
+// officer in the arc, and hitting anyone in public draws the law.
+import { PUNCH_COOLDOWN, PUNCH_RANGE } from './config.js';
+
+export function createCombat(player, peds, police, audio) {
   let cooldown = 0;
+
+  function inFront(tx, tz) {
+    const dx = tx - player.pos.x;
+    const dz = tz - player.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > PUNCH_RANGE || d === 0) return 0;
+    const fx = Math.sin(player.heading);
+    const fz = Math.cos(player.heading);
+    const dot = (dx * fx + dz * fz) / d;
+    return dot > 0.35 ? d : 0;
+  }
+
   return {
-    update(dt) {
-      if (cooldown > 0) cooldown -= dt;
+    tryPunch() {
+      if (cooldown > 0 || player.car !== null) return false;
+      cooldown = PUNCH_COOLDOWN;
+      let best = null;
+      let bestD = PUNCH_RANGE + 1;
+      let bestKind = null;
+      for (const ped of peds.peds) {
+        if (ped.down) continue;
+        const d = inFront(ped.group.position.x, ped.group.position.z);
+        if (d > 0 && d < bestD) {
+          bestD = d;
+          best = ped;
+          bestKind = 'ped';
+        }
+      }
+      for (const officer of police.officers) {
+        if (officer.down) continue;
+        const d = inFront(officer.group.position.x, officer.group.position.z);
+        if (d > 0 && d < bestD) {
+          bestD = d;
+          best = officer;
+          bestKind = 'officer';
+        }
+      }
+      if (!best) {
+        audio.swing();
+        return false;
+      }
+      if (bestKind === 'ped') {
+        peds.knockDown(best);
+      } else {
+        best.health -= 1;
+        if (best.health <= 0) {
+          best.down = true;
+          best.downTimer = 14;
+          best.group.rotation.z = Math.PI / 2;
+          best.group.position.y = 0.25;
+        }
+      }
+      audio.punch();
+      police.addWanted(1);
+      return true;
     },
-    punch(player, peds, rivals, audio, onHitPed) {
-      if (cooldown > 0) return 0;
-      cooldown = 0.45;
-      const fx = Math.sin(player.heading);
-      const fz = Math.cos(player.heading);
-      let hits = 0;
-      const inArc = (x, z, range) => {
-        const dx = x - player.pos.x;
-        const dz = z - player.pos.z;
-        const d = Math.hypot(dx, dz);
-        if (d > range || d < 0.01) return false;
-        const dot = (dx * fx + dz * fz) / d;
-        return dot > 0.45;
-      };
-      for (const p of peds.peds) {
-        if (p.state === 'down') continue;
-        if (inArc(p.pos.x, p.pos.z, 2.4)) {
-          peds.knockDown(p);
-          p.pos.x += fx * 1.4;
-          p.pos.z += fz * 1.4;
-          hits += 1;
-          if (onHitPed) onHitPed();
-        }
-      }
-      for (const r of rivals) {
-        if (r.hp <= 0) continue;
-        if (inArc(r.pos.x, r.pos.z, 2.4)) {
-          r.hp -= 34;
-          r.pos.x += fx * 1.2;
-          r.pos.z += fz * 1.2;
-          hits += 1;
-        }
-      }
-      if (audio) audio.blip('punch');
-      return hits;
+    update(dt) {
+      cooldown = Math.max(0, cooldown - dt);
     },
   };
 }

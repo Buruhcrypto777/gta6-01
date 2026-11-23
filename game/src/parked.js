@@ -1,66 +1,43 @@
-// Solmar Bay — parked cars waiting to be stolen. They sit at curb spots from
-// the world data; stealing one removes it, and fresh cars slowly arrive.
-import { CAR_COLORS } from './config.js';
-import { createCarMesh, VEHICLE_TYPES } from './vehicles.js';
+// Solmar Bay — parked cars: the cars Mara can steal.
+// Twenty-four cars sit along the curbs of the street grid, each with a type
+// and a position; stealing one is the first step of every getaway.
+import { CAR_COLORS, VEHICLE_TYPES, WORLD } from './config.js';
+import { makeCarMesh } from './vehicles.js';
 
-export function createParked(THREE, scene, data, rng) {
-  const spots = [...data.parkedSpots];
+export function createParked(scene, rng) {
   const cars = [];
-  let respawnTimer = 0;
-
-  function spawnAt(spot) {
-    const type = rng.int(0, 5);
-    const mesh = createCarMesh(THREE, type, rng.pick(CAR_COLORS));
-    mesh.position.set(spot.x, 0, spot.z);
-    mesh.rotation.y = spot.angle;
-    scene.add(mesh);
-    const car = {
-      mesh,
-      x: spot.x,
-      z: spot.z,
-      type: VEHICLE_TYPES[type],
-      taken: false,
-      heading: spot.angle,
-      pos: mesh.position,
-      speed: 0,
-    };
-    cars.push(car);
-    return car;
+  const streets = [];
+  for (let k = -4; k <= 4; k += 1) streets.push(k * WORLD.roadEvery);
+  for (let i = 0; i < 24; i += 1) {
+    const alongX = rng.chance(0.5);
+    const street = rng.pick(streets);
+    const along = rng.range(-190, 190);
+    const side = rng.chance(0.5) ? 1 : -1;
+    const x = alongX ? along : street + side * (WORLD.roadWidth / 2 + 1.6);
+    const z = alongX ? street + side * (WORLD.roadWidth / 2 + 1.6) : along;
+    if (z > WORLD.beachAt - 4) continue;
+    const type = rng.pick(VEHICLE_TYPES);
+    const color = type === 'taxi' ? 0xf7c948 : rng.pick(CAR_COLORS);
+    const group = makeCarMesh(type, color);
+    group.position.set(x, 0, z);
+    group.rotation.y = alongX ? (side > 0 ? Math.PI / 2 : -Math.PI / 2) : side > 0 ? 0 : Math.PI;
+    scene.add(group);
+    cars.push({ x, z, angle: group.rotation.y, type, color, group, taken: false });
   }
-
-  for (let i = 0; i < 16 && spots.length > 0; i += 1) {
-    const spot = spots.splice(rng.int(0, spots.length - 1), 1)[0];
-    spawnAt(spot);
-  }
-
   return {
     cars,
-    nearest(x, z, maxD) {
+    nearest(x, z, maxDist) {
       let best = null;
-      let bestD = maxD;
-      for (const c of cars) {
-        if (c.taken) continue;
-        const d = Math.hypot(c.x - x, c.z - z);
+      let bestD = maxDist;
+      for (const car of cars) {
+        if (car.taken) continue;
+        const d = Math.hypot(car.x - x, car.z - z);
         if (d < bestD) {
           bestD = d;
-          best = c;
+          best = car;
         }
       }
       return best;
-    },
-    remove(car) {
-      car.taken = true;
-      scene.remove(car.mesh);
-      const i = cars.indexOf(car);
-      if (i >= 0) cars.splice(i, 1);
-    },
-    update(dt) {
-      respawnTimer += dt;
-      if (respawnTimer > 18 && cars.length < 16 && spots.length > 0) {
-        respawnTimer = 0;
-        const spot = spots.splice(rng.int(0, spots.length - 1), 1)[0];
-        spawnAt(spot);
-      }
     },
   };
 }

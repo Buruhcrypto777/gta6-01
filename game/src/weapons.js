@@ -1,141 +1,134 @@
-// Solmar Bay — weapons (NEW in Round 4): a pistol and a shotgun, hitscan
-// with tracers and a muzzle flash. Punch-only was the biggest visible gap
-// against the top entries; now Mara can fight back, and one screenshot
-// stages a real shootout.
-export function createWeapons(THREE, scene) {
-  const muzzleLight = new THREE.PointLight(0xffc861, 0, 18);
-  scene.add(muzzleLight);
-  const flash = new THREE.Mesh(
-    new THREE.SphereGeometry(0.42, 8, 6),
-    new THREE.MeshBasicMaterial({ color: '#ffe9a8' }),
-  );
-  flash.visible = false;
-  scene.add(flash);
+// Solmar Bay — weapons: pistol and shotgun (new in Round 4).
+// Hitscan fire from the camera's centre: a tracer line, a muzzle flash and
+// a crack of synth gunfire. Pedestrians go down, officers take three hits,
+// and every shot in public draws the law. Fists stay on key 3 / F.
+import { createRandom } from './random.js';
 
+const WEAPONS = ['fists', 'pistol', 'shotgun'];
+const RANGE = { pistol: 70, shotgun: 28 };
+
+export function createWeapons(scene, player, peds, police, audio, camera) {
+  const rng = createRandom(99);
+  let current = 'fists';
+  let cooldown = 0;
   const tracers = [];
-  const SPECS = {
-    pistol: { dmg: 34, rate: 0.22, range: 70, pellets: 1, spread: 0.012, sound: 'shot' },
-    shotgun: { dmg: 14, rate: 0.9, range: 32, pellets: 7, spread: 0.09, sound: 'shotgun' },
-  };
+  const flash = new THREE.PointLight(0xffc860, 0, 14, 1.6);
+  scene.add(flash);
+  const rayOrigin = new THREE.Vector3();
+  const rayDir = new THREE.Vector3();
 
-  function rayHit(from, dir, target, radius) {
-    // Closest approach of the ray to the target centre.
-    const cx = target.x - from.x;
-    const cy = target.y - from.y;
-    const cz = target.z - from.z;
-    const t = cx * dir.x + cy * dir.y + cz * dir.z;
-    if (t < 0) return -1;
-    const px = from.x + dir.x * t;
-    const py = from.y + dir.y * t;
-    const pz = from.z + dir.z * t;
-    const d = Math.hypot(target.x - px, target.y - py, target.z - pz);
-    return d < radius ? t : -1;
+  function shootRay(origin, dir, range) {
+    let best = null;
+    let bestT = range;
+    let bestKind = null;
+    const consider = (x, y, z, ref, kind) => {
+      const dx = x - origin.x;
+      const dy = y - origin.y;
+      const dz = z - origin.z;
+      const t = dx * dir.x + dy * dir.y + dz * dir.z;
+      if (t < 1 || t > bestT) return;
+      const px = origin.x + dir.x * t - x;
+      const py = origin.y + dir.y * t - y;
+      const pz = origin.z + dir.z * t - z;
+      const perp = Math.sqrt(px * px + py * py + pz * pz);
+      if (perp < 1.3) {
+        bestT = t;
+        best = ref;
+        bestKind = kind;
+      }
+    };
+    for (const ped of peds.peds) {
+      if (ped.down) continue;
+      const p = ped.group.position;
+      consider(p.x, p.y + 1.1, p.z, ped, 'ped');
+    }
+    for (const officer of police.officers) {
+      if (officer.down) continue;
+      const p = officer.group.position;
+      consider(p.x, p.y + 1.1, p.z, officer, 'officer');
+    }
+    return { hit: best, kind: bestKind, t: bestT };
+  }
+
+  function addTracer(from, to) {
+    // A thin glowing box reads far better in a JPEG than a 1px line.
+    const len = from.distanceTo(to);
+    const line = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.16, len),
+      new THREE.MeshBasicMaterial({ color: 0xfff2a8, transparent: true, opacity: 0.95 }),
+    );
+    line.position.copy(from).lerp(to, 0.5);
+    line.lookAt(to);
+    scene.add(line);
+    tracers.push({ line, life: 0.09 });
+  }
+
+  function hitTarget(hit, kind) {
+    if (kind === 'ped') {
+      peds.knockDown(hit);
+    } else if (kind === 'officer') {
+      hit.health -= 1;
+      if (hit.health <= 0) {
+        hit.down = true;
+        hit.downTimer = 14;
+        hit.group.rotation.z = Math.PI / 2;
+        hit.group.position.y = 0.25;
+      }
+    }
+    police.addWanted(1);
   }
 
   return {
-    kind: 'pistol',
-    cooldown: 0,
-    flashLife: 0,
-
-    switchTo(kind) {
-      if (SPECS[kind]) this.kind = kind;
+    get current() {
+      return current;
     },
-
-    label() {
-      return this.kind === 'pistol' ? 'PISTOL' : 'SHOTGUN';
+    select(name) {
+      if (!WEAPONS.includes(name)) return false;
+      current = name;
+      audio.weaponSwitch(name);
+      return true;
     },
-
-    fire(from, dir, ctx, audio) {
-      if (this.cooldown > 0) return [];
-      const spec = SPECS[this.kind];
-      this.cooldown = spec.rate;
-      const hits = [];
-      const muzzle = { x: from.x + dir.x * 1.2, y: from.y + 0.1, z: from.z + dir.z * 1.2 };
-      flash.position.set(muzzle.x, muzzle.y, muzzle.z);
-      flash.visible = true;
-      this.flashLife = 0.06;
-      muzzleLight.position.set(muzzle.x, muzzle.y + 0.4, muzzle.z);
-      muzzleLight.intensity = 3;
-      const rnd = ctx && ctx.rng ? () => ctx.rng.next() : Math.random;
-      for (let p = 0; p < spec.pellets; p += 1) {
-        const d = {
-          x: dir.x + (rnd() - 0.5) * spec.spread * 2,
-          y: dir.y + (rnd() - 0.5) * spec.spread * 2,
-          z: dir.z + (rnd() - 0.5) * spec.spread * 2,
-        };
-        const dl = Math.hypot(d.x, d.y, d.z) || 1;
-        d.x /= dl;
-        d.y /= dl;
-        d.z /= dl;
-        // Nearest hittable thing along this pellet.
-        let bestT = spec.range;
-        let bestTarget = null;
-        let bestKind = null;
-        const consider = (list, kind, radius, yOff) => {
-          for (const t of list) {
-            if (t.hp !== undefined && t.hp <= 0) continue;
-            if (t.state === 'down') continue;
-            const hit = rayHit(muzzle, d, { x: t.pos.x, y: t.pos.y + yOff, z: t.pos.z }, radius);
-            if (hit >= 0 && hit < bestT) {
-              bestT = hit;
-              bestTarget = t;
-              bestKind = kind;
-            }
-          }
-        };
-        if (ctx.peds) consider(ctx.peds.peds, 'ped', 0.9, 1.1);
-        if (ctx.rivals) consider(ctx.rivals, 'rival', 0.9, 1.1);
-        if (ctx.police) {
-          consider(ctx.police.state.cars, 'cruiser', 2.3, 0.8);
+    fire() {
+      if (current === 'fists' || cooldown > 0) return false;
+      const rate = current === 'pistol' ? 0.22 : 0.85;
+      cooldown = rate;
+      camera.getWorldDirection(rayDir);
+      rayOrigin.copy(camera.position);
+      const muzzle = new THREE.Vector3(
+        player.pos.x + Math.sin(player.heading) * 0.9,
+        player.pos.y + 1.4,
+        player.pos.z + Math.cos(player.heading) * 0.9,
+      );
+      flash.position.copy(muzzle);
+      flash.intensity = 9;
+      const pellets = current === 'pistol' ? 1 : 8;
+      for (let i = 0; i < pellets; i += 1) {
+        const dir = rayDir.clone();
+        if (current === 'shotgun') {
+          dir.x += rng.range(-0.045, 0.045);
+          dir.y += rng.range(-0.03, 0.03);
+          dir.z += rng.range(-0.045, 0.045);
+          dir.normalize();
         }
-        const end = {
-          x: muzzle.x + d.x * bestT,
-          y: muzzle.y + d.y * bestT,
-          z: muzzle.z + d.z * bestT,
-        };
-        // A visible tracer: a thin glowing box stretched muzzle-to-impact
-        // (a 1px line does not read at screenshot resolution).
-        const tlen = Math.hypot(end.x - muzzle.x, end.y - muzzle.y, end.z - muzzle.z) || 0.01;
-        const tracer = new THREE.Mesh(
-          new THREE.BoxGeometry(0.09, 0.09, tlen),
-          new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.95 }),
-        );
-        tracer.position.set((muzzle.x + end.x) / 2, (muzzle.y + end.y) / 2, (muzzle.z + end.z) / 2);
-        tracer.lookAt(end.x, end.y, end.z);
-        scene.add(tracer);
-        tracers.push({ line: tracer, life: 0.09 });
-        if (bestTarget) {
-          hits.push({ target: bestTarget, kind: bestKind, dmg: spec.dmg });
-          if (bestKind === 'ped') {
-            ctx.peds.knockDown(bestTarget);
-          } else if (bestKind === 'rival') {
-            bestTarget.hp -= spec.dmg;
-          } else if (bestKind === 'cruiser') {
-            bestTarget.hp = (bestTarget.hp ?? 100) - spec.dmg;
-            if (bestTarget.hp <= 0) {
-              bestTarget.disabled = true;
-              bestTarget.speed = 0;
-            }
-          }
-        }
+        const result = shootRay(rayOrigin, dir, RANGE[current]);
+        const end = rayOrigin.clone().addScaledVector(dir, result.t);
+        addTracer(muzzle, end);
+        if (result.hit) hitTarget(result.hit, result.kind);
       }
-      if (audio) audio.blip(spec.sound);
-      return hits;
+      audio.gunshot(current);
+      return true;
     },
-
     update(dt) {
-      if (this.cooldown > 0) this.cooldown -= dt;
-      if (this.flashLife > 0) {
-        this.flashLife -= dt;
-        if (this.flashLife <= 0) flash.visible = false;
-      }
-      muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt * 40);
+      cooldown = Math.max(0, cooldown - dt);
+      flash.intensity = Math.max(0, flash.intensity - dt * 90);
       for (let i = tracers.length - 1; i >= 0; i -= 1) {
-        tracers[i].life -= dt;
-        tracers[i].line.material.opacity = Math.max(0, tracers[i].life / 0.09);
-        if (tracers[i].life <= 0) {
-          scene.remove(tracers[i].line);
-          tracers[i].line.geometry.dispose();
+        const t = tracers[i];
+        t.life -= dt;
+        t.line.material.opacity = Math.max(0, t.life / 0.09) * 0.95;
+        if (t.life <= 0) {
+          scene.remove(t.line);
+          t.line.geometry.dispose();
+          t.line.material.dispose();
           tracers.splice(i, 1);
         }
       }

@@ -1,17 +1,9 @@
-// Solmar Bay — the six vehicle types, their low-poly meshes, and the arcade
-// driving model (accelerate, steer by speed, collide with building boxes).
-import { WORLD } from './config.js';
+// Solmar Bay — the car factory: six drivable vehicle types plus the
+// police cruiser, all built from boxes, cylinders and emissive lights so
+// they read clearly at a glance and cost few draw calls.
+import { VEHICLE_STATS } from './config.js';
 
-export const VEHICLE_TYPES = [
-  { name: 'Sedan', top: 26, accel: 14, len: 4.4, wid: 1.9 },
-  { name: 'Coupe', top: 30, accel: 17, len: 4.1, wid: 1.8 },
-  { name: 'Taxi', top: 24, accel: 13, len: 4.4, wid: 1.9 },
-  { name: 'Truck', top: 20, accel: 10, len: 5.6, wid: 2.2 },
-  { name: 'Van', top: 22, accel: 11, len: 4.8, wid: 2.0 },
-  { name: 'Sport', top: 38, accel: 22, len: 4.2, wid: 1.9 },
-];
-
-function box(THREE, w, h, d, color, x, y, z) {
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
     new THREE.MeshLambertMaterial({ color }),
@@ -20,96 +12,102 @@ function box(THREE, w, h, d, color, x, y, z) {
   return m;
 }
 
-export function createCarMesh(THREE, typeIndex, color) {
-  const type = VEHICLE_TYPES[typeIndex % VEHICLE_TYPES.length];
-  const group = new THREE.Group();
-  const L = type.len;
-  const W = type.wid;
-  const paint = color || '#c0392b';
-  const low = typeIndex === 5; // sport sits lower
-  const bodyH = low ? 0.5 : 0.62;
-  const bodyY = low ? 0.5 : 0.58;
-  group.add(box(THREE, L, bodyH, W, paint, 0, bodyY, 0));
-  // Cabin: glasshouse for cars, cab + bed for the truck.
-  if (typeIndex === 3) {
-    group.add(box(THREE, 1.3, 0.85, W * 0.92, paint, L / 2 - 1.1, bodyY + 0.6, 0));
-    group.add(box(THREE, 1.2, 0.7, W * 0.9, '#1a2530', L / 2 - 1.05, bodyY + 0.62, 0));
-    group.add(box(THREE, L * 0.42, 0.5, W * 0.9, '#3a3f46', -L * 0.22, bodyY + 0.5, 0));
-  } else {
-    group.add(box(THREE, L * 0.48, 0.5, W * 0.86, '#1a2530', -L * 0.05, bodyY + bodyH / 2 + 0.22, 0));
-    group.add(box(THREE, L * 0.5, 0.1, W * 0.88, paint, -L * 0.05, bodyY + bodyH / 2 + 0.5, 0));
-  }
-  if (typeIndex === 5) {
-    group.add(box(THREE, 0.18, 0.08, W * 0.9, '#111111', -L / 2 + 0.1, bodyY + 0.42, 0));
-  }
-  if (typeIndex === 2) {
-    // Taxi roof sign.
-    group.add(box(THREE, 0.7, 0.22, 0.4, '#f1c40f', -L * 0.05, bodyY + bodyH / 2 + 0.68, 0));
-  }
-  // Wheels.
-  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.26, 10);
-  const wheelMat = new THREE.MeshLambertMaterial({ color: '#141414' });
-  const wheels = [];
-  for (const [wx, wz] of [[L * 0.32, W / 2], [L * 0.32, -W / 2], [-L * 0.32, W / 2], [-L * 0.32, -W / 2]]) {
-    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-    wheel.rotation.x = Math.PI / 2;
-    wheel.position.set(wx, 0.34, wz);
-    group.add(wheel);
-    wheels.push(wheel);
-  }
-  // Headlights and taillights.
-  const headMat = new THREE.MeshBasicMaterial({ color: '#fff6c9' });
-  const tailMat = new THREE.MeshBasicMaterial({ color: '#ff2d2d' });
-  for (const wz of [-W / 2 + 0.25, W / 2 - 0.25]) {
-    const h = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.3), headMat);
-    h.position.set(L / 2 + 0.01, bodyY + 0.05, wz);
-    group.add(h);
-    const t = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.3), tailMat);
-    t.position.set(-L / 2 - 0.01, bodyY + 0.05, wz);
-    group.add(t);
-  }
-  group.userData.wheels = wheels;
-  group.userData.type = type;
-  return group;
+function wheel(x, z) {
+  const w = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.36, 0.36, 0.28, 10),
+    new THREE.MeshLambertMaterial({ color: 0x181818 }),
+  );
+  w.rotation.x = Math.PI / 2;
+  w.position.set(x, 0.36, z);
+  return w;
 }
 
-// One arcade driving step. `car` carries mesh, pos (Vector3), heading,
-// speed and type. Throttle -1..1, steer -1..1. Colliders are building AABBs.
-export function driveStep(car, throttle, steer, dt, colliders) {
-  const type = car.type;
-  car.speed += throttle * type.accel * dt;
-  if (throttle === 0) car.speed *= Math.max(0, 1 - 0.9 * dt);
-  else car.speed *= Math.max(0, 1 - 0.12 * dt);
-  if (car.speed > type.top) car.speed = type.top;
-  if (car.speed < -9) car.speed = -9;
-  const turn = steer * 1.9 * (car.speed / type.top) * (car.speed < 0 ? -1 : 1);
-  car.heading += turn * dt;
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  car.pos.x += fx * car.speed * dt;
-  car.pos.z += fz * car.speed * dt;
-  // Building collisions: circle vs AABB, push out along the shallow axis.
-  const r = type.len / 2 - 0.3;
-  for (const c of colliders) {
-    if (car.pos.x > c.minX - r && car.pos.x < c.maxX + r && car.pos.z > c.minZ - r && car.pos.z < c.maxZ + r) {
-      const pushL = car.pos.x - (c.minX - r);
-      const pushR = (c.maxX + r) - car.pos.x;
-      const pushB = car.pos.z - (c.minZ - r);
-      const pushF = (c.maxZ + r) - car.pos.z;
-      const m = Math.min(pushL, pushR, pushB, pushF);
-      if (m === pushL) car.pos.x = c.minX - r;
-      else if (m === pushR) car.pos.x = c.maxX + r;
-      else if (m === pushB) car.pos.z = c.minZ - r;
-      else car.pos.z = c.maxZ + r;
-      car.speed *= 0.45;
+const LIGHT_FRONT = new THREE.MeshBasicMaterial({ color: 0xfff6c8 });
+const LIGHT_REAR = new THREE.MeshBasicMaterial({ color: 0xff2a22 });
+const GLASS = new THREE.MeshLambertMaterial({ color: 0x1d2f3d });
+
+export function makeCarMesh(type, color) {
+  const group = new THREE.Group();
+  const stats = VEHICLE_STATS[type] || VEHICLE_STATS.sedan;
+  const dark = new THREE.MeshLambertMaterial({ color });
+
+  if (type === 'van') {
+    group.add(box(2.0, 1.5, 4.6, color, 0, 1.05, 0));
+    const cab = box(1.8, 0.7, 1.0, 0x1d2f3d, 0, 1.5, 1.7);
+    cab.material = GLASS;
+    group.add(cab);
+  } else if (type === 'truck') {
+    group.add(box(2.0, 0.9, 2.0, color, 0, 0.85, 1.3));
+    const cab = box(1.9, 1.1, 1.4, color, 0, 1.7, 1.6);
+    group.add(cab);
+    const shield = box(1.7, 0.6, 0.1, 0x1d2f3d, 0, 1.75, 2.32);
+    shield.material = GLASS;
+    group.add(shield);
+    group.add(box(1.9, 0.5, 2.6, 0x5a5a5a, 0, 0.9, -1.2));
+  } else if (type === 'convertible') {
+    group.add(box(2.0, 0.75, 4.4, color, 0, 0.75, 0));
+    group.add(box(1.7, 0.5, 1.6, 0x2c1a12, 0, 1.05, -0.4));
+    const shield = box(1.7, 0.55, 0.12, 0x1d2f3d, 0, 1.35, 1.3);
+    shield.material = GLASS;
+    shield.rotation.x = -0.25;
+    group.add(shield);
+  } else if (type === 'coupe') {
+    group.add(box(1.95, 0.7, 4.6, color, 0, 0.7, 0));
+    const cabin = box(1.7, 0.55, 2.0, 0x1d2f3d, 0, 1.2, -0.3);
+    cabin.material = GLASS;
+    group.add(cabin);
+    const spoiler = box(1.8, 0.08, 0.4, 0x181818, 0, 1.05, -2.2);
+    group.add(spoiler);
+  } else {
+    // sedan and taxi share the classic three-box shape.
+    group.add(box(2.0, 0.85, 4.4, color, 0, 0.8, 0));
+    const cabin = box(1.75, 0.7, 2.2, 0x1d2f3d, 0, 1.5, -0.2);
+    cabin.material = GLASS;
+    group.add(cabin);
+    if (type === 'taxi') {
+      const sign = new THREE.Mesh(
+        new THREE.BoxGeometry(0.9, 0.28, 0.4),
+        new THREE.MeshBasicMaterial({ color: 0xffe14d }),
+      );
+      sign.position.set(0, 2.0, -0.2);
+      group.add(sign);
     }
   }
-  // World bounds.
-  const b = WORLD.bound;
-  car.pos.x = Math.max(-b, Math.min(b, car.pos.x));
-  car.pos.z = Math.max(-b, Math.min(b, car.pos.z));
-  car.mesh.position.copy(car.pos);
-  car.mesh.rotation.y = car.heading;
-  const spin = (car.speed * dt) / 0.34;
-  for (const w of car.mesh.userData.wheels) w.rotation.y += spin;
+
+  if (type === 'police') {
+    // Black-and-white cruiser with a red/blue light bar. Callers pass a
+    // near-black body colour; the white door band makes it read as police.
+    const door = box(2.02, 0.5, 2.0, 0xf2f2f2, 0, 0.85, 0);
+    group.add(door);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.22, 0.4), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+    bar.position.set(0, 1.95, -0.2);
+    group.add(bar);
+    const red = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.2, 0.42), new THREE.MeshBasicMaterial({ color: 0xff2020 }));
+    red.position.set(-0.33, 2.1, -0.2);
+    group.add(red);
+    const blue = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.2, 0.42), new THREE.MeshBasicMaterial({ color: 0x2040ff }));
+    blue.position.set(0.33, 2.1, -0.2);
+    group.add(blue);
+  }
+
+  // Wheels and lights, same for every type.
+  group.add(wheel(-0.95, 1.45));
+  group.add(wheel(0.95, 1.45));
+  group.add(wheel(-0.95, -1.45));
+  group.add(wheel(0.95, -1.45));
+  const hl = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.08), LIGHT_FRONT);
+  hl.position.set(-0.65, 0.75, 2.21);
+  group.add(hl);
+  const hr = hl.clone();
+  hr.position.x = 0.65;
+  group.add(hr);
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.08), LIGHT_REAR);
+  tl.position.set(-0.65, 0.75, -2.21);
+  group.add(tl);
+  const tr = tl.clone();
+  tr.position.x = 0.65;
+  group.add(tr);
+
+  group.userData.stats = stats;
+  return group;
 }

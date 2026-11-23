@@ -1,59 +1,111 @@
 // Solmar Bay — keyboard and mouse input.
-// Keys are held in a set for steering; one-shot actions queue as a bitmask
-// that the loop consumes once, so a single keypress never fires twice.
-import { ACTIONS } from './config.js';
+// Tracks held keys, edge-triggered actions (each press is taken once) and
+// mouse drag deltas for orbiting the camera. WASD/arrows move, Shift sprints,
+// E enters or leaves a car, F punches, 1/2/3 pick a weapon, R changes the
+// radio station, P or Escape pauses, Enter/Space confirms.
+export const ACTION_CONFIRM = 1;
+export const ACTION_PAUSE = 2;
+export const ACTION_ENTER = 4;
+export const ACTION_PUNCH = 8;
+export const ACTION_FIRE = 16;
+export const ACTION_RADIO = 32;
+export const ACTION_WEAPON_1 = 64;
+export const ACTION_WEAPON_2 = 128;
+export const ACTION_WEAPON_3 = 256;
+export const ACTION_MISSION = 512;
 
-const KEYMAP = {
-  Space: ACTIONS.CONFIRM,
-  Enter: ACTIONS.CONFIRM,
-  Escape: ACTIONS.PAUSE,
-  KeyP: ACTIONS.PAUSE,
-  KeyE: ACTIONS.ENTER,
-  KeyF: ACTIONS.PUNCH,
-  Digit1: ACTIONS.WEAPON1,
-  Digit2: ACTIONS.WEAPON2,
-  KeyR: ACTIONS.RADIO,
-  KeyT: ACTIONS.TAXI,
+const KEY_ACTIONS = {
+  Enter: ACTION_CONFIRM,
+  Space: ACTION_CONFIRM,
+  KeyP: ACTION_PAUSE,
+  Escape: ACTION_PAUSE,
+  KeyE: ACTION_ENTER,
+  KeyF: ACTION_PUNCH,
+  KeyR: ACTION_RADIO,
+  Digit1: ACTION_WEAPON_1,
+  Digit2: ACTION_WEAPON_2,
+  Digit3: ACTION_WEAPON_3,
+  KeyM: ACTION_MISSION,
 };
 
-export function createInput() {
-  const down = new Set();
-  const queued = new Set();
-  let clickQueued = false;
+export function createInput(canvas) {
+  const held = new Set();
+  let queued = 0;
+  let mouseDown = false;
+  let dragX = 0;
+  let dragY = 0;
 
-  window.addEventListener('keydown', (e) => {
-    if (e.repeat) return;
-    down.add(e.code);
-    if (KEYMAP[e.code]) queued.add(KEYMAP[e.code]);
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-      e.preventDefault();
+  function onKeyDown(event) {
+    if (event.repeat) return;
+    held.add(event.code);
+    const action = KEY_ACTIONS[event.code];
+    if (action !== undefined) {
+      queued |= action;
+      event.preventDefault();
     }
-  });
-  window.addEventListener('keyup', (e) => down.delete(e.code));
-  window.addEventListener('blur', () => down.clear());
-  window.addEventListener('mousedown', (e) => {
-    if (e.button === 0) clickQueued = true;
-  });
+    if (event.code === 'Space') event.preventDefault();
+  }
+  function onKeyUp(event) {
+    held.delete(event.code);
+  }
+  function onMouseDown(event) {
+    if (event.button === 0) {
+      mouseDown = true;
+      queued |= ACTION_FIRE;
+    }
+  }
+  function onMouseUp(event) {
+    if (event.button === 0) mouseDown = false;
+  }
+  function onMouseMove(event) {
+    if (!mouseDown) return;
+    dragX += event.movementX || 0;
+    dragY += event.movementY || 0;
+  }
+  function onBlur() {
+    held.clear();
+    mouseDown = false;
+  }
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
+  canvas.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mouseup', onMouseUp);
+  window.addEventListener('mousemove', onMouseMove);
 
   return {
-    isDown: (code) => down.has(code),
-    axis() {
-      const f = (down.has('KeyW') || down.has('ArrowUp') ? 1 : 0)
-        - (down.has('KeyS') || down.has('ArrowDown') ? 1 : 0);
-      const s = (down.has('KeyD') || down.has('ArrowRight') ? 1 : 0)
-        - (down.has('KeyA') || down.has('ArrowLeft') ? 1 : 0);
-      return { f, s };
+    held,
+    isDown(code) {
+      return held.has(code);
+    },
+    /** WASD/arrows movement vector, x right, z forward, normalised. */
+    moveVector() {
+      let x = 0;
+      let z = 0;
+      if (held.has('KeyW') || held.has('ArrowUp')) z -= 1;
+      if (held.has('KeyS') || held.has('ArrowDown')) z += 1;
+      if (held.has('KeyA') || held.has('ArrowLeft')) x -= 1;
+      if (held.has('KeyD') || held.has('ArrowRight')) x += 1;
+      if (x !== 0 && z !== 0) {
+        x *= Math.SQRT1_2;
+        z *= Math.SQRT1_2;
+      }
+      return { x, z };
+    },
+    sprinting() {
+      return held.has('ShiftLeft') || held.has('ShiftRight');
     },
     takeActions() {
-      let bits = 0;
-      for (const b of queued) bits |= b;
-      queued.clear();
-      return bits;
+      const out = queued;
+      queued = 0;
+      return out;
     },
-    takeClick() {
-      const c = clickQueued;
-      clickQueued = false;
-      return c;
+    takeDrag() {
+      const out = { x: dragX, y: dragY };
+      dragX = 0;
+      dragY = 0;
+      return out;
     },
   };
 }
