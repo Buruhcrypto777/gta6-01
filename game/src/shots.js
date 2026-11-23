@@ -1,97 +1,137 @@
-// Solmar Bay — screenshot staging: deterministic scenes for the four shots,
-// picked with ?shot=cover|downtown|mission|beach. Each one puts the player,
-// the police and a mission objective where the camera can see several systems
-// at once. Normal play uses no shot parameter.
-const THREE = window.THREE;
-import { CFG } from './config.js';
-import { makeCarMesh } from './vehicles.js';
+// Solmar Bay — staged screenshot scenes behind ?shot=cover|downtown|mission|
+// beach. Each one plays the real rules forward from a fresh seeded world for
+// a fixed number of steps with a simple autopilot, so the frame is what a
+// short burst of real play looks like — dense streets, traffic, pedestrians,
+// police and action — and the same seed always stages the same frame.
+import { STEP } from './config.js';
 
-function givePlayerCar(G, type, color, x, z, heading) {
-  const mesh = makeCarMesh(type, color);
-  mesh.position.set(x, 0, z);
-  mesh.rotation.y = heading;
-  G.scene.add(mesh);
-  const car = { mesh, x, z, heading, speed: 24, steer: 0, type, color, stolen: true };
-  G.player.enterCar(car);
-  G.player.car.speed = 24;
-  return car;
-}
-
-function stageCover(G) {
-  // Golden-hour chase: sports car downtown, two cruisers ahead in frame,
-  // helicopter overhead, four stars, Hot Pursuit objective.
-  givePlayerCar(G, 'sports', 0xd94f3d, 0, 160, 0);
-  G.police.setWanted(4);
-  // Put the helicopter straight into its hover spot so it is in frame.
-  const heli = G.police.state.heli;
-  if (heli) { heli.x = 18; heli.z = 95; heli.y = 26; heli.mesh.position.set(18, 26, 95); }
-  const P = G.police.state;
-  for (const [dx, dz] of [[-10, -45], [12, -65]]) {
-    const mesh = makeCarMesh('police', CFG.palette.police);
-    const car = { mesh, x: dx, z: 160 + dz, heading: Math.PI, speed: 30, siren: true };
-    mesh.position.set(car.x, 0, car.z);
-    G.scene.add(mesh);
-    P.cars.push(car);
-  }
-  G.hud.setObjective('Hot Pursuit: Lose the cops — get your wanted level to 0');
-  G.hud.setWanted(4);
-  G.player.cash = 1250; G.hud.setCash(1250);
-}
-
-function stageDowntown(G) {
-  // Taxi run through neon downtown, traffic ahead, The Drop beacon in view.
-  givePlayerCar(G, 'taxi', CFG.palette.taxi, 160, 320, 0);
-  G.hud.setObjective('The Drop: Drive to The Tropicana — 408 m');
-  G.hud.setDistance('The Tropicana', 408);
-  G.player.cash = 400; G.hud.setCash(400);
-  const t = G.traffic.nearest(160, 200, 200);
-  if (t) { t.x = 156; t.z = 220; t.heading = 0; }
-}
-
-function stageMission(G) {
-  // On foot at Coral Market, mid-punch, collectors closing in.
-  G.player.pos.set(560, 0, 420);
-  G.player.heading = 0;
-  G.player.mesh.position.copy(G.player.pos);
-  G.player.mesh.rotation.y = G.player.heading;
-  G.combat.spawnThug(556, 402);
-  G.combat.spawnThug(566, 406);
-  // Hold the punch pose long enough to survive the screenshot wait.
-  G.player.punchAnim = 1.2;
-  G.police.setWanted(1);
-  G.hud.setObjective('Payback: 3 collectors left — press F to punch');
-  G.hud.setWanted(1);
-  G.player.cash = 850; G.hud.setCash(850);
-  G.player.health = 82; G.hud.setHealth(82);
-}
-
-function stageBeach(G) {
-  // Sunset on the coastal road: ocean left, palms, a red sports car.
-  givePlayerCar(G, 'sports', 0xd94f3d, -800, 120, 0);
-  G.hud.setObjective('Free roam — the coast road at sunset');
-  G.hud.setDistance('', 0);
-  G.player.cash = 0; G.hud.setCash(0);
-}
-
-const STAGES = { cover: stageCover, downtown: stageDowntown, mission: stageMission, beach: stageBeach };
-
-export function applyShot(G) {
-  const params = new URLSearchParams(window.location.search);
-  const name = params.get('shot');
-  if (!name || !STAGES[name]) return null;
+export function stageShot(name, G) {
   G.state = 'playing';
-  G.hud.hideStart();
-  STAGES[name](G);
-  // Let the camera settle behind the player, then flag readiness. Use the
-  // car's position when driving: G.player.pos is stale until the first frame.
-  const px = G.player.car ? G.player.car.x : G.player.pos.x;
-  const pz = G.player.car ? G.player.car.z : G.player.pos.z;
-  G.player.camPos.set(
-    px + Math.sin(G.player.heading) * G.player.camDist,
-    G.player.camHeight,
-    pz + Math.cos(G.player.heading) * G.player.camDist
-  );
-  window.__shot = name;
-  window.__shotReady = true;
-  return name;
+  G.hud.hideTitle();
+  G.player.health = 100;
+  G.cash = 1250;
+  const rng = G.rng;
+
+  function driveFor(seconds, throttle) {
+    G.auto = { throttle, steer: 0 };
+    const steps = Math.round(seconds / STEP);
+    for (let i = 0; i < steps; i += 1) G.stepWorld(STEP);
+    G.auto = null;
+  }
+  function walkFor(seconds) {
+    G.auto = { f: 1, s: 0 };
+    const steps = Math.round(seconds / STEP);
+    for (let i = 0; i < steps; i += 1) G.stepWorld(STEP);
+    G.auto = null;
+  }
+  function idleFor(seconds) {
+    const steps = Math.round(seconds / STEP);
+    for (let i = 0; i < steps; i += 1) G.stepWorld(STEP);
+  }
+
+  if (name === 'cover') {
+    // Hero frame: Mara in the Sport car at a downtown crossroads at golden
+    // hour, 4-star heat — helicopter overhead, cruisers closing in, traffic
+    // and pedestrians everywhere, neon behind her.
+    const car = G.parked.nearest(0, -20, 999);
+    G.player.pos.set(0, 0, -20);
+    G.player.heading = Math.PI;
+    G.player.mesh.position.copy(G.player.pos);
+    G.player.mesh.rotation.y = Math.PI;
+    if (car) {
+      G.parked.remove(car);
+      car.type = { name: 'Sport', top: 38, accel: 22, len: 4.2, wid: 1.9 };
+      car.mesh.position.copy(G.player.pos);
+      // Aim the car north first: enterCar copies the car's heading.
+      car.heading = Math.PI;
+      car.mesh.rotation.y = Math.PI;
+      G.player.enterCar(car);
+      G.scene.add(car.mesh);
+    }
+    G.police.setWanted(4);
+    // Cruisers right behind her.
+    G.police.state.cars.forEach((c, i) => {
+      c.pos.set((i - 1.5) * 7, 0, 8 + i * 9);
+      c.heading = Math.PI;
+      c.mesh.position.copy(c.pos);
+    });
+    G.traffic.gather(0, -20, 12, rng);
+    G.peds.gather(0, -20, 14, rng);
+    G.hud.setObjective('4 stars — lose the heat!');
+    driveFor(1.6, 1);
+    idleFor(0.4);
+  } else if (name === 'downtown') {
+    // A living street: Mara on foot walking up a downtown avenue, traffic
+    // streaming past, pedestrians on every sidewalk, towers on both sides.
+    G.player.pos.set(0, 0, 23);
+    G.player.heading = Math.PI;
+    G.player.mesh.position.copy(G.player.pos);
+    G.player.mesh.rotation.y = G.player.heading;
+    G.traffic.gather(0, 10, 10, rng);
+    G.peds.gather(0, 10, 16, rng);
+    G.hud.setObjective('Downtown Solmar Bay — golden hour');
+    walkFor(2.2);
+    idleFor(0.6);
+  } else if (name === 'mission') {
+    // The Tropicana shootout: Mara on foot in the lot, pistol out, five
+    // rivals ahead, one tracer already in the air, cruisers rolling in.
+    G.missions.nextIndex = 3;
+    G.missions.startNext(G);
+    G.missions.current.stepIdx = 1;
+    G.missions.setupStep(G);
+    const spot = G.data.missionSpots.tropicana;
+    G.player.pos.set(spot.x + 11, 0, spot.z + 11);
+    G.player.heading = Math.atan2(spot.x - G.player.pos.x, spot.z - G.player.pos.z);
+    G.player.mesh.position.copy(G.player.pos);
+    G.player.mesh.rotation.y = G.player.heading;
+    G.police.setWanted(2);
+    G.weapons.switchTo('pistol');
+    idleFor(1.4);
+    // Fire last, so the muzzle flash and tracer are still in the frame
+    // when the shot is painted (they only fade on the next world step).
+    const rival = G.missions.rivals[0];
+    if (rival) {
+      const dir = {
+        x: rival.pos.x - G.player.pos.x,
+        y: 0,
+        z: rival.pos.z - G.player.pos.z,
+      };
+      const dl = Math.hypot(dir.x, dir.y, dir.z) || 1;
+      dir.x /= dl;
+      dir.y /= dl;
+      dir.z /= dl;
+      G.weapons.fire(
+        { x: G.player.pos.x, y: 1.4, z: G.player.pos.z },
+        dir,
+        { peds: G.peds, rivals: G.missions.rivals, police: G.police, rng: G.rng },
+        G.audio,
+      );
+    }
+  } else {
+    // Beach: Mara driving the coastal road at sunset, ocean and marina on
+    // her right, palms and beachgoers, boats bobbing in the bay.
+    const car = G.parked.nearest(-40, 138, 999);
+    G.player.pos.set(-40, 0, 138);
+    G.player.heading = Math.PI / 2;
+    G.player.mesh.position.copy(G.player.pos);
+    G.player.mesh.rotation.y = Math.PI / 2;
+    if (car) {
+      G.parked.remove(car);
+      car.type = { name: 'Coupe', top: 30, accel: 17, len: 4.1, wid: 1.8 };
+      car.mesh.position.copy(G.player.pos);
+      // Aim the car east first: enterCar copies the car's heading.
+      car.heading = Math.PI / 2;
+      car.mesh.rotation.y = Math.PI / 2;
+      G.player.enterCar(car);
+      G.scene.add(car.mesh);
+    }
+    G.traffic.gather(-10, 138, 6, rng);
+    G.peds.gather(-10, 168, 8, rng);
+    G.hud.setObjective('Coastal drive — sunset run');
+    driveFor(2.2, 1);
+    idleFor(0.6);
+  }
+
+  G.shotInfo = { shot: name, seed: G.seed };
+  return { screen: 'play', best: G.cash };
 }

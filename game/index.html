@@ -3,86 +3,63 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — Open World Crime Game</title>
+<title>Solmar Bay — Open World</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; font-family: "Segoe UI", Arial, Helvetica, sans-serif; }
-  #game { display: block; width: 100%; height: 100%; touch-action: none; }
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); z-index: 5; }
-  #top-left { position: absolute; top: 14px; left: 16px; display: flex; align-items: center; gap: 12px; }
-  #cash { font-size: 26px; font-weight: 800; color: #7dff5e; letter-spacing: .5px; }
-  #stars { font-size: 24px; letter-spacing: 2px; }
-  #stars span { color: rgba(255,255,255,.25); }
-  #stars span.on { color: #ff3b30; }
-  #top-center { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; }
-  #objective { font-size: 19px; font-weight: 700; background: rgba(0,0,0,.45); padding: 6px 16px; border-radius: 20px; }
-  #distance { font-size: 15px; margin-top: 4px; color: #ffd27a; font-weight: 600; }
-  #timer { font-size: 22px; font-weight: 800; margin-top: 4px; color: #ff5e5e; }
-  #minimap { position: absolute; top: 14px; right: 16px; width: 220px; height: 220px; border: 3px solid rgba(255,255,255,.85); border-radius: 6px; background: #20242a; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
-  #speedo { position: absolute; right: 20px; bottom: 18px; font-size: 34px; font-weight: 800; text-align: right; }
-  #speed-unit { font-size: 16px; font-weight: 600; color: #ffd27a; }
-  #hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 15px; background: rgba(0,0,0,.55); padding: 7px 16px; border-radius: 18px; white-space: nowrap; }
-  #toast { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 24px; font-weight: 800; color: #ffd27a; background: rgba(0,0,0,.55); padding: 10px 22px; border-radius: 10px; opacity: 0; transition: opacity .3s; text-align: center; max-width: 80vw; }
-  #toast.show { opacity: 1; }
-  #health { position: absolute; left: 16px; bottom: 52px; width: 180px; height: 12px; background: rgba(0,0,0,.55); border-radius: 6px; overflow: hidden; }
-  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3b30, #ff9500); transition: width .2s; }
-  #radio { position: absolute; left: 16px; bottom: 26px; font-size: 14px; color: #ffd27a; font-weight: 600; }
-  #street { position: absolute; left: 16px; bottom: 78px; font-size: 14px; color: rgba(255,255,255,.85); }
-  .menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; z-index: 10; background: linear-gradient(160deg, rgba(20,10,30,.88), rgba(60,20,10,.88)); color: #fff; text-align: center; padding: 24px; }
-  .menu h1 { font-size: 64px; letter-spacing: 6px; color: #ffd27a; text-shadow: 0 4px 24px rgba(255,180,80,.6); }
-  .menu h2 { font-size: 30px; margin: 8px 0 16px; color: #ff8a5e; }
-  .menu p { max-width: 640px; font-size: 17px; line-height: 1.55; color: rgba(255,255,255,.9); }
-  .menu .controls { margin: 18px 0; font-size: 15px; line-height: 1.9; background: rgba(0,0,0,.4); padding: 12px 22px; border-radius: 10px; }
-  .menu .controls b { color: #ffd27a; }
-  .menu button { pointer-events: auto; cursor: pointer; margin: 6px; padding: 13px 30px; font-size: 18px; font-weight: 700; color: #1a1210; background: #ffd27a; border: none; border-radius: 30px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
-  .menu button:hover { background: #ffe1a0; }
-  .menu button.ghost { background: rgba(255,255,255,.16); color: #fff; }
-  #error { position: fixed; left: 12px; top: 50%; z-index: 20; display: none; max-width: 70vw; background: #7a1010; color: #fff; padding: 12px 16px; border-radius: 8px; font: 14px monospace; white-space: pre-wrap; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1218; font-family: 'Segoe UI', Arial, sans-serif; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .hidden { display: none !important; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+  #cash { position: absolute; top: 14px; left: 16px; font-size: 26px; font-weight: 800; color: #ffd166; }
+  #coins { position: absolute; top: 46px; left: 16px; font-size: 14px; font-weight: 600; color: #ffe9a8; }
+  #stars { position: absolute; top: 12px; right: 16px; font-size: 26px; letter-spacing: 3px; color: #ffd166; }
+  #radio { position: absolute; top: 48px; right: 16px; font-size: 13px; font-weight: 700; color: #ffb3d9; background: rgba(20,10,24,0.55); padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(255,45,149,0.5); }
+  #objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 15px; font-weight: 700; background: rgba(10,14,20,0.62); padding: 8px 18px; border-radius: 8px; border-left: 4px solid #ffd166; max-width: 46vw; text-align: center; }
+  #toast { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-size: 19px; font-weight: 800; color: #fff; background: rgba(10,14,20,0.66); padding: 10px 22px; border-radius: 10px; opacity: 0; transition: opacity 0.4s; text-align: center; }
+  #minimap { position: absolute; left: 16px; bottom: 16px; width: 160px; height: 160px; border: 2px solid rgba(255,255,255,0.55); border-radius: 8px; background: #10151c; }
+  #speed { position: absolute; right: 18px; bottom: 52px; font-size: 26px; font-weight: 800; }
+  #weapon { position: absolute; right: 18px; bottom: 20px; font-size: 15px; font-weight: 700; color: #ffe9a8; background: rgba(10,14,20,0.55); padding: 5px 12px; border-radius: 20px; }
+  #health { position: absolute; right: 18px; bottom: 92px; width: 170px; height: 10px; background: rgba(0,0,0,0.55); border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.4); }
+  #health-fill { height: 100%; width: 100%; background: #2ecc71; }
+  #damage { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 90px 30px rgba(255,0,0,0.55); opacity: 0; }
+  #title { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(26,10,30,0.25) 0%, rgba(26,10,30,0.72) 100%); color: #fff; text-align: center; z-index: 10; }
+  #title h1 { font-size: 84px; margin: 0; letter-spacing: 6px; color: #ffd166; text-shadow: 0 0 24px rgba(255,45,149,0.8), 0 4px 0 rgba(0,0,0,0.4); }
+  #title h2 { font-size: 20px; margin: 6px 0 26px; font-weight: 400; color: #ffe9f4; letter-spacing: 2px; }
+  #btn-start { pointer-events: auto; font-size: 22px; font-weight: 800; letter-spacing: 2px; color: #1a1218; background: linear-gradient(90deg, #ffd166, #ff5e8a); border: none; border-radius: 40px; padding: 16px 46px; cursor: pointer; box-shadow: 0 6px 24px rgba(255,45,149,0.55); }
+  #btn-start:hover { transform: scale(1.04); }
+  #controls { margin-top: 30px; font-size: 14px; line-height: 1.9; color: #e8e8e8; background: rgba(10,14,20,0.55); padding: 14px 26px; border-radius: 12px; }
+  #controls b { color: #ffd166; }
+  #pause { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(10,10,18,0.6); color: #fff; font-size: 34px; font-weight: 800; letter-spacing: 4px; z-index: 9; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
+<canvas id="game" aria-label="Solmar Bay: drive, steal cars, outrun the police and finish jobs across an open coastal city"></canvas>
+<p id="status" role="status" aria-live="polite"></p>
 <div id="hud">
-  <div id="top-left"><span id="cash">$0</span><span id="stars"></span></div>
-  <div id="top-center"><div id="objective"></div><div id="distance"></div><div id="timer"></div></div>
-  <canvas id="minimap" width="220" height="220"></canvas>
-  <div id="speedo"><span id="speed">0</span><span id="speed-unit"> km/h</span></div>
-  <div id="hint"></div>
+  <div id="cash">$0</div>
+  <div id="coins">☀ 0/12</div>
+  <div id="stars">☆☆☆☆☆</div>
+  <div id="radio">♪ SOLMAR FM — ON</div>
+  <div id="objective">Welcome to Solmar Bay</div>
   <div id="toast"></div>
+  <canvas id="minimap" width="160" height="160"></canvas>
   <div id="health"><div id="health-fill"></div></div>
-  <div id="radio"></div>
-  <div id="street"></div>
+  <div id="speed">ON FOOT</div>
+  <div id="weapon">PISTOL ∞</div>
 </div>
-<div id="menu-start" class="menu">
+<div id="damage"></div>
+<div id="title">
   <h1>SOLMAR BAY</h1>
-  <h2>A getaway driver. A sun-soaked city. One last score.</h2>
-  <p>Mara Voss drives for whoever pays. Tonight the whole city is her board: steal cars, outrun the law, settle debts at Coral Market and pull the getaway that retires her — if the cops and the helicopter don't catch her first.</p>
-  <div class="controls">
-    <b>WASD</b> move / drive &nbsp;·&nbsp; <b>E</b> steal &amp; exit car &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>Space</b> handbrake<br>
-    <b>Shift</b> sprint &nbsp;·&nbsp; <b>M</b> mission &nbsp;·&nbsp; <b>T</b> taxi job (in a taxi) &nbsp;·&nbsp; <b>R</b> radio station<br>
-    <b>Mouse drag</b> orbit camera &nbsp;·&nbsp; <b>Wheel</b> zoom &nbsp;·&nbsp; <b>Esc</b> pause
+  <h2>AN ORIGINAL OPEN-WORLD GETAWAY — MARA VOSS, DRIVER FOR HIRE</h2>
+  <button id="btn-start">▶ &nbsp;START ENGINE</button>
+  <div id="controls">
+    <b>WASD</b> walk / drive &nbsp;·&nbsp; <b>E</b> steal &amp; exit car &nbsp;·&nbsp; <b>F</b> punch<br>
+    <b>Click</b> shoot &nbsp;·&nbsp; <b>1 / 2</b> pistol / shotgun &nbsp;·&nbsp; <b>R</b> radio station<br>
+    <b>T</b> Night Shift taxi &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; collect 12 Sun Coins ☀
   </div>
-  <button id="btn-start">▶ &nbsp;Start the engine</button>
-  <p style="margin-top:14px;font-size:14px;color:rgba(255,255,255,.65)">7 story missions · taxi shifts · 12 Sun Coins · wanted level 0–5 · police chases, roadblocks &amp; helicopter</p>
 </div>
-<div id="menu-pause" class="menu">
-  <h2>Paused</h2>
-  <p>Solmar Bay waits for no one — except right now.</p>
-  <div><button id="btn-resume">Resume</button><button id="btn-save" class="ghost">Save game</button></div>
-  <div><button id="btn-radio" class="ghost">Radio on / off</button><button id="btn-mute" class="ghost">Mute</button><button id="btn-restart" class="ghost">Restart</button></div>
-</div>
-<div id="menu-busted" class="menu">
-  <h1 style="color:#ff3b30">BUSTED</h1>
-  <p>The Solmar Bay police took their cut. Mara walks out of the station and back to the Safehouse.</p>
-  <div><button id="btn-respawn">Back to the Safehouse</button></div>
-</div>
-<div id="menu-wasted" class="menu">
-  <h1 style="color:#ff3b30">WASTED</h1>
-  <p>Mara got flattened. The hospital bill hurts almost as much as the beating.</p>
-  <div><button id="btn-respawn2">Back to the Safehouse</button></div>
-</div>
-<div id="error"></div>
-<script src="vendor/three.min.js"></script>
-<script type="module" src="src/main.js"></script>
+<div id="pause" class="hidden">PAUSED</div>
+<script src="./vendor/three.min.js"></script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

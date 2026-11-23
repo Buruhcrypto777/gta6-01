@@ -1,33 +1,27 @@
-// Solmar Bay — save and load: cash, story progress, collected coins and
-// settings, in localStorage. One key, one JSON object, no network.
-const KEY = 'solmar-bay-save-v3';
-
-export function loadSave() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return null;
-    return data;
-  } catch { return null; }
-}
+// Solmar Bay — localStorage save. Cash, finished jobs, collected coins and
+// the radio station survive a reload; a missing or corrupt save just means
+// a fresh start.
+import { SAVE_KEY } from './config.js';
 
 export function saveGame(G) {
   try {
-    const data = {
-      cash: Math.floor(G.player.cash),
-      missionsDone: G.missions.index,
-      coinsTaken: G.collectibles.coins.filter((c) => c.taken).map((c) => c.id),
-      radio: G.audio.stationName(),
-      muted: G.audio.isMuted(),
-      pos: { x: G.player.pos.x, z: G.player.pos.z },
-      savedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(KEY, JSON.stringify(data));
-    return true;
-  } catch { return false; }
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      cash: G.cash,
+      missionsDone: G.missions.done,
+      nextIndex: G.missions.nextIndex,
+      coins: G.collectibles.takenIndices(),
+      station: G.audio.station,
+    }));
+  } catch {
+    // Storage can be off (private windows): the game still plays.
+  }
 }
 
-export function clearSave() {
-  try { localStorage.removeItem(KEY); } catch { /* private mode */ }
+export function loadGame() {
+  try {
+    const raw = window.localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
